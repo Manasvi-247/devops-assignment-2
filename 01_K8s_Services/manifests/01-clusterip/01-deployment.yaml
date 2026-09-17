@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-api
+  namespace: svc-lab
+  labels:
+    app: hello-api
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hello-api
+  template:
+    metadata:
+      labels:
+        app: hello-api
+        tier: backend
+    spec:
+      containers:
+        - name: hello
+          # plain-text build echoes back the pod name + pod IP that served the
+          # request, which makes the service load balancing visible in curl output
+          image: nginxdemos/nginx-hello:plain-text
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "150m"
+              memory: "128Mi"

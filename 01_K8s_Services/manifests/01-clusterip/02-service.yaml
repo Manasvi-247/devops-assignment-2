@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-api-svc
+  namespace: svc-lab
+  labels:
+    app: hello-api
+spec:
+  type: ClusterIP
+  selector:
+    app: hello-api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9090        # port the service answers on, inside the cluster
+      targetPort: http  # named port -> container port 8080
