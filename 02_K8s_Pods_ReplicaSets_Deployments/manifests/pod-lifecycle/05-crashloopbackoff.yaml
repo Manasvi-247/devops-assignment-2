@@ -1,0 +1,16 @@
+# CrashLoopBackOff. Exits non-zero with the default restartPolicy Always,
+# so the kubelet restarts it, it fails again, and the backoff grows
+# 10s, 20s, 40s ... up to 5 minutes.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-crashloop
+  namespace: lifecycle
+spec:
+  containers:
+    - name: crasher
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'starting up'; sleep 2; echo 'crashing now'; exit 1"]
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

@@ -1,7 +1,9 @@
 # local run artefacts
-*.log
 .DS_Store
 kubeconfig
 
-# output.log is the evidence the READMEs quote, so it is tracked on purpose
+# the output*.log files are the evidence the READMEs quote, so they are tracked
+# on purpose. any other stray log is not.
+*.log
 !*/output.log
+!*/output-*.log

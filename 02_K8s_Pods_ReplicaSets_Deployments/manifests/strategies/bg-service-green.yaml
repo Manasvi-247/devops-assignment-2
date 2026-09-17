@@ -1,0 +1,12 @@
+# Live traffic points at the green slot.
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-service
+  namespace: strategies
+spec:
+  type: ClusterIP
+  selector:
+    app: myapp
+    slot: green
+  ports: [{name: http, port: 80, targetPort: 5678}]

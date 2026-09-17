@@ -1,0 +1,14 @@
+# ErrImagePull then ImagePullBackOff. The API object is created fine, the
+# runtime cannot fetch the image.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-image-error
+  namespace: lifecycle
+spec:
+  containers:
+    - name: missing
+      image: nginx:this-tag-does-not-exist-24bcs10406
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

@@ -1,0 +1,139 @@
+
+$ kubectl apply -f manifests/00-namespace.yaml
+namespace/workloads unchanged
+
+===== 1. Transient phases: ContainerCreating -> Running -> Completed =====
+# watching in the background, then applying, so the transitions are captured
+
+$ kubectl apply -f manifests/hello.yaml
+pod/hello-pod created
+
+$ kubectl -n workloads get pods -w        # streamed while the pod ran
+hello-pod              0/1   Pending   0     0s
+hello-pod              0/1   Pending   0     0s
+hello-pod              0/1   ContainerCreating   0     0s
+hello-pod              0/1   ContainerCreating   0     1s
+hello-pod              1/1   Running             0     2s
+hello-pod              0/1   Completed           0     10s
+hello-pod              0/1   Completed           0     11s
+
+$ kubectl -n workloads get pod hello-pod
+NAME        READY   STATUS      RESTARTS   AGE
+hello-pod   0/1     Completed   0          25s
+
+$ kubectl -n workloads logs hello-pod
+Hello from Kubernetes
+batch work done
+
+$ kubectl -n workloads get pod hello-pod -o jsonpath='phase={.status.phase} exitCode={.status.containerStatuses[0].state.terminated.exitCode} reason={.status.containerStatuses[0].state.terminated.reason}{"\n"}'
+phase=Succeeded exitCode=0 reason=Completed
+
+$ kubectl -n workloads delete -f manifests/hello.yaml
+pod "hello-pod" deleted from workloads namespace
+
+===== 2. StatefulSet: ordinal names, stable identity, one PVC each =====
+
+$ kubectl apply -f manifests/06-statefulset.yaml
+service/mysql created
+statefulset.apps/mysql created
+# pods are created strictly in order, 0 then 1 then 2, each waiting for the last
+
+$ kubectl -n workloads get pods -l app=mysql --no-headers
+mysql-0   0/1   Running   0     20s
+
+$ kubectl -n workloads get pods -l app=mysql --no-headers
+mysql-0   1/1   Running   0     41s
+mysql-1   0/1   Pending   0     2s
+
+$ kubectl -n workloads get pods -l app=mysql --no-headers
+mysql-0   1/1   Running   0     61s
+mysql-1   0/1   Running   0     22s
+
+$ kubectl -n workloads get pods -l app=mysql --no-headers
+mysql-0   1/1   Running   0     81s
+mysql-1   1/1   Running   0     42s
+mysql-2   0/1   Running   0     4s
+
+$ kubectl -n workloads get pods -l app=mysql --no-headers
+mysql-0   1/1   Running   0     101s
+mysql-1   1/1   Running   0     62s
+mysql-2   0/1   Running   0     24s
+
+$ kubectl -n workloads get pods -l app=mysql --no-headers
+mysql-0   1/1   Running   0     2m2s
+mysql-1   1/1   Running   0     83s
+mysql-2   1/1   Running   0     45s
+
+$ kubectl -n workloads get statefulset mysql
+NAME    READY   AGE
+mysql   3/3     2m2s
+# each pod has its own PersistentVolumeClaim, named <claim>-<pod>:
+
+$ kubectl -n workloads get pvc -l app=mysql
+NAME           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-mysql-0   Bound    pvc-84e633f4-14a9-41e4-8872-b56da3c74f6f   1Gi        RWO            standard       <unset>                 2m2s
+data-mysql-1   Bound    pvc-ec2850e7-484c-44fa-becf-1c34eb9f4e81   1Gi        RWO            standard       <unset>                 83s
+data-mysql-2   Bound    pvc-26519e56-81d5-4a53-8941-f893c3d9e354   1Gi        RWO            standard       <unset>                 45s
+# stable network identity: one DNS name per pod via the headless service
+
+$ kubectl -n workloads get svc mysql
+NAME    TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+mysql   ClusterIP   None         <none>        3306/TCP   2m2s
+# identity drill: delete mysql-1 and watch the SAME name come back
+
+$ kubectl -n workloads get pod mysql-1 -o jsonpath='before: name={.metadata.name} uid={.metadata.uid} node={.spec.nodeName}{"\n"}'
+before: name=mysql-1 uid=ad5bf167-2fbe-434c-97d6-be6d227e6306 node=svc-lab-worker
+
+$ kubectl -n workloads delete pod mysql-1
+pod "mysql-1" deleted from workloads namespace
+
+$ kubectl -n workloads get pod mysql-1 -o jsonpath='after:  name={.metadata.name} uid={.metadata.uid} node={.spec.nodeName}{"\n"}'
+after:  name=mysql-1 uid=49c8ceff-3681-47d9-b27d-82dea6de7771 node=svc-lab-worker
+# and the PVC is unchanged, so the new pod reattaches the same disk:
+
+$ kubectl -n workloads get pvc data-mysql-1
+NAME           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-mysql-1   Bound    pvc-ec2850e7-484c-44fa-becf-1c34eb9f4e81   1Gi        RWO            standard       <unset>                 110s
+# contrast with a Deployment: delete a pod and the replacement gets a NEW name
+
+$ kubectl -n workloads get pods -l app=web --no-headers | head -1
+web-66d744c6cf-c5hlt   1/1   Running   0     47m
+
+$ kubectl -n workloads delete pod web-66d744c6cf-c5hlt
+pod "web-66d744c6cf-c5hlt" deleted from workloads namespace
+
+$ kubectl -n workloads get pods -l app=web --no-headers
+web-66d744c6cf-8b5h9   1/1   Running   0     13s
+web-66d744c6cf-fc2tp   1/1   Running   0     47m
+web-66d744c6cf-gfp75   1/1   Running   0     47m
+web-66d744c6cf-z8jzv   1/1   Running   0     47m
+
+===== 3. Immutable selector: the API server rejects a mismatch =====
+# selector says app=frontend, the pod template says app=backend
+
+$ kubectl apply -f manifests/07-selector-mismatch.yaml || true
+The Deployment "selector-error-demo" is invalid: spec.template.metadata.labels: Invalid value: {"app":"backend"}: `selector` does not match template `labels`
+# the fix is to make the template labels match the selector
+
+$ kubectl apply -f manifests/08-selector-fixed.yaml
+deployment.apps/selector-error-demo created
+
+$ kubectl -n workloads rollout status deployment/selector-error-demo --timeout=120s
+Waiting for deployment "selector-error-demo" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "selector-error-demo" rollout to finish: 1 of 2 updated replicas are available...
+deployment "selector-error-demo" successfully rolled out
+
+$ kubectl -n workloads get pods -l app=frontend --no-headers
+selector-error-demo-9897f8555-nxl89   1/1   Running   0     1s
+selector-error-demo-9897f8555-t2vgq   1/1   Running   0     1s
+# the selector itself is immutable once set. changing it on a live deployment:
+
+$ kubectl -n workloads patch deployment selector-error-demo --type merge -p '{"spec":{"selector":{"matchLabels":{"app":"changed"}}}}' || true
+The Deployment "selector-error-demo" is invalid: 
+* spec.template.metadata.labels: Invalid value: {"app":"frontend"}: `selector` does not match template `labels`
+* spec.selector: Invalid value: {"matchLabels":{"app":"changed"}}: field is immutable
+
+$ kubectl -n workloads delete -f manifests/08-selector-fixed.yaml
+deployment.apps "selector-error-demo" deleted from workloads namespace
+
+===== Done. Output saved to output-extras.log =====

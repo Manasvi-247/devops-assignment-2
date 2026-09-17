@@ -1,0 +1,16 @@
+# Phase: Failed. Exits non-zero with restartPolicy Never, so it is never
+# retried and the phase sticks at Failed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-failed
+  namespace: lifecycle
+spec:
+  restartPolicy: Never
+  containers:
+    - name: job
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'about to fail'; exit 1"]
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

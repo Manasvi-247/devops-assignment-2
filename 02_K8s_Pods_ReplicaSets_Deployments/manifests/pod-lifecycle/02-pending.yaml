@@ -1,0 +1,15 @@
+# Phase: Pending. Requests more memory than any node has, so the scheduler
+# can never place it. Stays Pending forever with a FailedScheduling event.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-pending
+  namespace: lifecycle
+spec:
+  containers:
+    - name: greedy
+      image: nginx:1.29-alpine
+      resources:
+        requests:
+          memory: "900Gi"
+          cpu: "200"

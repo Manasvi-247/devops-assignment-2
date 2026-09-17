@@ -1,0 +1,23 @@
+# Readiness probe. The container is Running immediately but the probe only
+# passes once /tmp/ready exists, 20s in. Until then READY stays 0/1 and a
+# service would not send it traffic.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-readiness
+  namespace: lifecycle
+  labels:
+    app: lifecycle-readiness
+spec:
+  containers:
+    - name: slow-ready
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 20; touch /tmp/ready; sleep 3600"]
+      readinessProbe:
+        exec:
+          command: ["cat", "/tmp/ready"]
+        initialDelaySeconds: 2
+        periodSeconds: 3
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

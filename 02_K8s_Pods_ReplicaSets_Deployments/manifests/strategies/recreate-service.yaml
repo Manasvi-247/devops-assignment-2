@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-recreate-svc
+  namespace: strategies
+spec:
+  type: ClusterIP
+  selector: {app: app-recreate}
+  ports: [{name: http, port: 80, targetPort: 5678}]

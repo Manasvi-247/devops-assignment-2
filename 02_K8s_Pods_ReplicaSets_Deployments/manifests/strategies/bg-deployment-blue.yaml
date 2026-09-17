@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-blue
+  namespace: strategies
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: myapp, slot: blue}
+  template:
+    metadata:
+      labels: {app: myapp, slot: blue, version: v1}
+    spec:
+      containers:
+        - name: app
+          image: hashicorp/http-echo:1.0
+          args: ["-text=BLUE ENVIRONMENT v1", "-listen=:5678"]
+          ports: [{name: http, containerPort: 5678}]
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          resources:
+            requests: {cpu: "10m", memory: "16Mi"}
+            limits: {cpu: "50m", memory: "32Mi"}

@@ -1,0 +1,14 @@
+# In-cluster client used to run the curl loops during each switch.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: loadgen
+  namespace: strategies
+spec:
+  containers:
+    - name: curl
+      image: curlimages/curl:8.7.1
+      command: ["sleep", "7200"]
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "100m", memory: "64Mi"}

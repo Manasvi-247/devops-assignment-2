@@ -1,0 +1,322 @@
+
+$ kubectl apply -f manifests/pod-lifecycle/00-namespace.yaml
+namespace/lifecycle created
+
+===== 1. Running =====
+
+$ kubectl apply -f manifests/pod-lifecycle/01-running.yaml
+pod/lifecycle-running created
+
+$ kubectl -n lifecycle wait --for=condition=Ready pod/lifecycle-running --timeout=120s
+pod/lifecycle-running condition met
+
+$ kubectl -n lifecycle get pod lifecycle-running -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount
+NAME                PHASE     READY   RESTARTS
+lifecycle-running   Running   true    0
+
+===== 2. Pending: unschedulable, nothing has 900Gi =====
+
+$ kubectl apply -f manifests/pod-lifecycle/02-pending.yaml
+pod/lifecycle-pending created
+
+$ kubectl -n lifecycle get pod lifecycle-pending
+NAME                READY   STATUS    RESTARTS   AGE
+lifecycle-pending   0/1     Pending   0          8s
+
+$ kubectl -n lifecycle describe pod lifecycle-pending | grep -A6 'Events:'
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  9s    default-scheduler  0/3 nodes are available: 1 node(s) had untolerated taint(s), 2 Insufficient cpu, 2 Insufficient memory. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.
+
+===== 3. Succeeded: exit 0, restartPolicy Never =====
+
+$ kubectl apply -f manifests/pod-lifecycle/03-succeeded.yaml
+pod/lifecycle-succeeded created
+
+$ kubectl -n lifecycle get pod lifecycle-succeeded
+NAME                  READY   STATUS      RESTARTS   AGE
+lifecycle-succeeded   0/1     Completed   0          10s
+
+$ kubectl -n lifecycle logs lifecycle-succeeded
+work finished cleanly
+
+$ kubectl -n lifecycle get pod lifecycle-succeeded -o jsonpath='{.status.phase} exitCode={.status.containerStatuses[0].state.terminated.exitCode}{"\n"}'
+Succeeded exitCode=0
+
+===== 4. Failed: exit 1, restartPolicy Never =====
+
+$ kubectl apply -f manifests/pod-lifecycle/04-failed.yaml
+pod/lifecycle-failed created
+
+$ kubectl -n lifecycle get pod lifecycle-failed
+NAME               READY   STATUS   RESTARTS   AGE
+lifecycle-failed   0/1     Error    0          10s
+
+$ kubectl -n lifecycle get pod lifecycle-failed -o jsonpath='{.status.phase} exitCode={.status.containerStatuses[0].state.terminated.exitCode} reason={.status.containerStatuses[0].state.terminated.reason}{"\n"}'
+Failed exitCode=1 reason=Error
+
+===== 5. CrashLoopBackOff: exit 1 with restartPolicy Always =====
+
+$ kubectl apply -f manifests/pod-lifecycle/05-crashloopbackoff.yaml
+pod/lifecycle-crashloop created
+# polling every 10s to watch RESTARTS climb and the backoff grow
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop --no-headers
+lifecycle-crashloop   0/1   Error   1 (6s ago)   10s
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop --no-headers
+lifecycle-crashloop   1/1   Running   2 (14s ago)   21s
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop --no-headers
+lifecycle-crashloop   0/1   Error   2 (24s ago)   31s
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop --no-headers
+lifecycle-crashloop   0/1   Error   2 (34s ago)   41s
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop --no-headers
+lifecycle-crashloop   0/1   Error   3 (30s ago)   51s
+
+$ kubectl -n lifecycle logs lifecycle-crashloop --previous
+unable to retrieve container logs for containerd://b81bab14f7d2cae4f605f074544f0d6603b6fe49da138aa71a1db97f950d5680
+$ kubectl -n lifecycle describe pod lifecycle-crashloop | grep -A6 'Events:' | tail -5
+  ----     ------     ----              ----               -------
+  Normal   Scheduled  51s               default-scheduler  Successfully assigned lifecycle/lifecycle-crashloop to svc-lab-worker2
+  Normal   Pulled     5s (x4 over 50s)  kubelet            spec.containers{crasher}: Container image "busybox:1.36" already present on machine and can be accessed by the pod
+  Normal   Created    5s (x4 over 50s)  kubelet            spec.containers{crasher}: Container created
+  Normal   Started    4s (x4 over 49s)  kubelet            spec.containers{crasher}: Container started
+
+===== 6. ErrImagePull -> ImagePullBackOff =====
+
+$ kubectl apply -f manifests/pod-lifecycle/06-imagepullbackoff.yaml
+pod/lifecycle-image-error created
+
+$ kubectl -n lifecycle get pod lifecycle-image-error
+NAME                    READY   STATUS         RESTARTS   AGE
+lifecycle-image-error   0/1     ErrImagePull   0          6s
+# a few seconds later the state moves from ErrImagePull to ImagePullBackOff
+
+$ kubectl -n lifecycle get pod lifecycle-image-error
+NAME                    READY   STATUS             RESTARTS   AGE
+lifecycle-image-error   0/1     ImagePullBackOff   0          27s
+
+$ kubectl -n lifecycle describe pod lifecycle-image-error | grep -A8 'Events:'
+Events:
+  Type     Reason     Age                From               Message
+  ----     ------     ----               ----               -------
+  Normal   Scheduled  27s                default-scheduler  Successfully assigned lifecycle/lifecycle-image-error to svc-lab-worker2
+  Normal   BackOff    24s                kubelet            spec.containers{missing}: Back-off pulling image "nginx:this-tag-does-not-exist-24bcs10406"
+  Warning  Failed     24s                kubelet            spec.containers{missing}: Error: ImagePullBackOff
+  Normal   Pulling    10s (x2 over 25s)  kubelet            spec.containers{missing}: Pulling image "nginx:this-tag-does-not-exist-24bcs10406"
+  Warning  Failed     8s (x2 over 24s)   kubelet            spec.containers{missing}: Failed to pull image "nginx:this-tag-does-not-exist-24bcs10406": rpc error: code = NotFound desc = failed to pull and unpack image "docker.io/library/nginx:this-tag-does-not-exist-24bcs10406": failed to resolve reference "docker.io/library/nginx:this-tag-does-not-exist-24bcs10406": docker.io/library/nginx:this-tag-does-not-exist-24bcs10406: not found
+  Warning  Failed     8s (x2 over 24s)   kubelet            spec.containers{missing}: Error: ErrImagePull
+# the API object exists in etcd even though no container could ever run:
+
+$ kubectl -n lifecycle get pod lifecycle-image-error -o jsonpath='{.metadata.uid}{"\n"}'
+e858bee5-d599-4cdf-a6cb-a4bb5dadb9f2
+
+===== 7. Readiness probe: Running is not the same as Ready =====
+
+$ kubectl apply -f manifests/pod-lifecycle/07-readiness.yaml
+pod/lifecycle-readiness created
+# polling: PHASE goes Running immediately, READY stays false for ~20s
+
+$ kubectl -n lifecycle get pod lifecycle-readiness -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready --no-headers
+lifecycle-readiness   Running   false
+
+$ kubectl -n lifecycle get pod lifecycle-readiness -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready --no-headers
+lifecycle-readiness   Running   false
+
+$ kubectl -n lifecycle get pod lifecycle-readiness -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready --no-headers
+lifecycle-readiness   Running   false
+
+$ kubectl -n lifecycle get pod lifecycle-readiness -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready --no-headers
+lifecycle-readiness   Running   false
+
+$ kubectl -n lifecycle get pod lifecycle-readiness -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready --no-headers
+lifecycle-readiness   Running   true
+
+$ kubectl -n lifecycle get pod lifecycle-readiness -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready --no-headers
+lifecycle-readiness   Running   true
+
+===== 8. Liveness probe: automated restart =====
+
+$ kubectl apply -f manifests/pod-lifecycle/08-liveness.yaml
+pod/lifecycle-liveness created
+# the app deletes its own health file after 15s, probe then fails 3 times
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   0     9s
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   0     17s
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   0     25s
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   0     33s
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   0     41s
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   0     49s
+
+$ kubectl -n lifecycle get pod lifecycle-liveness --no-headers
+lifecycle-liveness   1/1   Running   1 (2s ago)   57s
+
+$ kubectl -n lifecycle describe pod lifecycle-liveness | grep -A8 'Events:' | tail -6
+  Normal   Scheduled  57s                default-scheduler  Successfully assigned lifecycle/lifecycle-liveness to svc-lab-worker2
+  Warning  Unhealthy  32s (x3 over 38s)  kubelet            spec.containers{unhealthy}: Liveness probe failed: cat: can't open '/tmp/healthy': No such file or directory
+  Normal   Killing    32s                kubelet            spec.containers{unhealthy}: Container unhealthy failed liveness probe, will be restarted
+  Normal   Pulled     2s (x2 over 55s)   kubelet            spec.containers{unhealthy}: Container image "busybox:1.36" already present on machine and can be accessed by the pod
+  Normal   Created    2s (x2 over 55s)   kubelet            spec.containers{unhealthy}: Container created
+  Normal   Started    2s (x2 over 55s)   kubelet            spec.containers{unhealthy}: Container started
+
+===== 9. Startup probe: protects a slow boot =====
+
+$ kubectl apply -f manifests/pod-lifecycle/09-startup.yaml
+pod/lifecycle-startup created
+# liveness is aggressive (failureThreshold 1) but is held off until startup succeeds
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   0/1   Running   0     6s
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   0/1   Running   0     12s
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   0/1   Running   0     19s
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   0/1   Running   0     25s
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   1/1   Running   0     31s
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   1/1   Running   0     37s
+
+$ kubectl -n lifecycle get pod lifecycle-startup --no-headers
+lifecycle-startup   1/1   Running   0     43s
+# RESTARTS stayed 0: without the startup probe the liveness probe would have killed it
+
+===== 10. Init container: runs to completion first =====
+
+$ kubectl apply -f manifests/pod-lifecycle/10-init-container.yaml
+pod/lifecycle-init created
+# status shows Init:0/1 while the init container works
+
+$ kubectl -n lifecycle get pod lifecycle-init --no-headers
+lifecycle-init   0/1   Init:0/1   0     5s
+
+$ kubectl -n lifecycle get pod lifecycle-init --no-headers
+lifecycle-init   0/1   Init:0/1   0     10s
+
+$ kubectl -n lifecycle get pod lifecycle-init --no-headers
+lifecycle-init   1/1   Running   0     15s
+
+$ kubectl -n lifecycle wait --for=condition=Ready pod/lifecycle-init --timeout=120s
+pod/lifecycle-init condition met
+
+$ kubectl -n lifecycle logs lifecycle-init -c setup
+init: preparing config
+init: done
+
+$ kubectl -n lifecycle logs lifecycle-init -c app
+app sees:
+ready for app
+
+$ kubectl -n lifecycle describe pod lifecycle-init | grep -A8 'Init Containers:'
+Init Containers:
+  setup:
+    Container ID:  containerd://286f20e5e2736fd6722fa66bf76a0f1ce5be911ccc2557953ab7194cbebfe62b
+    Image:         busybox:1.36
+    Image ID:      docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+
+===== 11. Multi container pod: 2/2 ready, sidecar reads the app's log =====
+
+$ kubectl apply -f manifests/pod-lifecycle/11-multi-container.yaml
+pod/lifecycle-multi-container created
+
+$ kubectl -n lifecycle wait --for=condition=Ready pod/lifecycle-multi-container --timeout=120s
+pod/lifecycle-multi-container condition met
+
+$ kubectl -n lifecycle get pod lifecycle-multi-container
+NAME                        READY   STATUS    RESTARTS   AGE
+lifecycle-multi-container   2/2     Running   0          13s
+
+$ kubectl -n lifecycle logs lifecycle-multi-container -c sidecar --tail=4
+18:36:11 app request 2
+18:36:14 app request 3
+18:36:17 app request 4
+18:36:20 app request 5
+
+===== 12. Graceful termination: SIGTERM trap and the grace period =====
+
+$ kubectl apply -f manifests/pod-lifecycle/12-termination.yaml
+pod/lifecycle-termination created
+
+$ kubectl -n lifecycle wait --for=condition=Ready pod/lifecycle-termination --timeout=120s
+pod/lifecycle-termination condition met
+
+$ kubectl -n lifecycle logs lifecycle-termination
+# timing the delete: the trap sleeps 10s before exiting
+
+$ kubectl -n lifecycle delete pod lifecycle-termination
+pod "lifecycle-termination" deleted from lifecycle namespace
+# delete took 13 seconds
+
+===== Summary of every state produced =====
+
+$ kubectl -n lifecycle get pods -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount,REASON:.status.containerStatuses[0].state.waiting.reason
+NAME                        PHASE       READY    RESTARTS   REASON
+lifecycle-crashloop         Running     false    5          <none>
+lifecycle-failed            Failed      false    0          <none>
+lifecycle-image-error       Pending     false    0          ErrImagePull
+lifecycle-init              Running     true     0          <none>
+lifecycle-liveness          Running     true     2          <none>
+lifecycle-multi-container   Running     true     0          <none>
+lifecycle-pending           Pending     <none>   <none>     <none>
+lifecycle-readiness         Running     true     0          <none>
+lifecycle-running           Running     true     0          <none>
+lifecycle-startup           Running     true     0          <none>
+lifecycle-succeeded         Succeeded   false    0          <none>
+
+===== Done. Output saved to output-lifecycle.log =====
+
+===== 13. Closer look: the states that need a second pass =====
+# CrashLoopBackOff only shows once the backoff is long enough that the pod
+# is waiting rather than running. Checked again ~5 minutes in:
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop --no-headers
+lifecycle-crashloop   0/1   CrashLoopBackOff   5 (109s ago)   4m58s
+
+$ kubectl -n lifecycle get pod lifecycle-crashloop -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}: {.status.containerStatuses[0].state.waiting.message}{"
+"}'
+CrashLoopBackOff: back-off 2m40s restarting failed container=crasher pod=lifecycle-crashloop_lifecycle(ac8db845-d7e4-43b6-8513-b8996acdc3c0)
+# logs from the crashed instance, with --previous:
+
+$ kubectl -n lifecycle logs lifecycle-crashloop --previous
+starting up
+crashing now
+
+# Graceful termination again, this time reading the log during the delete
+# so the SIGTERM handler's own output is captured.
+
+$ kubectl -n lifecycle logs lifecycle-termination
+app started
+
+$ kubectl -n lifecycle logs -f lifecycle-termination   # streamed during the delete
+app started
+caught SIGTERM, draining for 10s
+clean exit
+
+# the delete took 11 seconds: the 10s drain, then exit
+
+===== Done. Output saved to output-lifecycle.log =====

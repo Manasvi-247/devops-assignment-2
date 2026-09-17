@@ -1,0 +1,196 @@
+
+$ kubectl apply -f manifests/strategies/00-namespace.yaml
+namespace/strategies created
+
+$ kubectl apply -f manifests/strategies/client.yaml
+pod/loadgen created
+
+$ kubectl -n strategies wait --for=condition=Ready pod/loadgen --timeout=180s
+pod/loadgen condition met
+
+===== A. BLUE-GREEN: two full environments, instant selector cutover =====
+
+$ kubectl apply -f manifests/strategies/bg-deployment-blue.yaml -f manifests/strategies/bg-deployment-green.yaml
+deployment.apps/app-blue created
+deployment.apps/app-green created
+
+$ kubectl -n strategies rollout status deployment/app-blue --timeout=180s
+Waiting for deployment "app-blue" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "app-blue" rollout to finish: 1 of 3 updated replicas are available...
+Waiting for deployment "app-blue" rollout to finish: 2 of 3 updated replicas are available...
+deployment "app-blue" successfully rolled out
+
+$ kubectl -n strategies rollout status deployment/app-green --timeout=180s
+deployment "app-green" successfully rolled out
+# both environments are live at once, 6 pods total:
+
+$ kubectl -n strategies get pods -l app=myapp --show-labels --no-headers | sort
+app-blue-78cf4f4c5b-2fxsz   1/1   Running   0     12s   app=myapp,pod-template-hash=78cf4f4c5b,slot=blue,version=v1
+app-blue-78cf4f4c5b-9pmjr   1/1   Running   0     12s   app=myapp,pod-template-hash=78cf4f4c5b,slot=blue,version=v1
+app-blue-78cf4f4c5b-tm62j   1/1   Running   0     12s   app=myapp,pod-template-hash=78cf4f4c5b,slot=blue,version=v1
+app-green-c7cdd85d4-bwz6m   1/1   Running   0     12s   app=myapp,pod-template-hash=c7cdd85d4,slot=green,version=v2
+app-green-c7cdd85d4-v6v9z   1/1   Running   0     12s   app=myapp,pod-template-hash=c7cdd85d4,slot=green,version=v2
+app-green-c7cdd85d4-xt2zz   1/1   Running   0     12s   app=myapp,pod-template-hash=c7cdd85d4,slot=green,version=v2
+# route live traffic to BLUE
+
+$ kubectl apply -f manifests/strategies/bg-service-blue.yaml
+service/myapp-service created
+
+$ kubectl -n strategies describe svc myapp-service | grep -E 'Selector|Endpoints'
+Selector:                 app=myapp,slot=blue
+Endpoints:                10.244.2.43:5678,10.244.1.41:5678,10.244.1.39:5678
+
+$ kubectl -n strategies exec loadgen -- sh -c 'for i in 1 2 3 4 5 6; do curl -s http://myapp-service/; done' | sort | uniq -c
+   6 BLUE ENVIRONMENT v1
+# THE SWITCH: flip the service selector to GREEN
+
+$ kubectl apply -f manifests/strategies/bg-service-green.yaml
+service/myapp-service configured
+
+$ kubectl -n strategies describe svc myapp-service | grep -E 'Selector|Endpoints'
+Selector:                 app=myapp,slot=green
+Endpoints:                10.244.1.38:5678,10.244.2.44:5678,10.244.1.40:5678
+
+$ kubectl -n strategies exec loadgen -- sh -c 'for i in 1 2 3 4 5 6; do curl -s http://myapp-service/; done' | sort | uniq -c
+   6 GREEN ENVIRONMENT v2
+# instant rollback: flip the selector back to BLUE
+
+$ kubectl apply -f manifests/strategies/bg-service-blue.yaml
+service/myapp-service configured
+
+$ kubectl -n strategies exec loadgen -- sh -c 'for i in 1 2 3 4 5 6; do curl -s http://myapp-service/; done' | sort | uniq -c
+   6 BLUE ENVIRONMENT v1
+
+$ kubectl delete -f manifests/strategies/bg-service-blue.yaml -f manifests/strategies/bg-deployment-blue.yaml -f manifests/strategies/bg-deployment-green.yaml
+service "myapp-service" deleted from strategies namespace
+deployment.apps "app-blue" deleted from strategies namespace
+deployment.apps "app-green" deleted from strategies namespace
+
+===== B. CANARY: one service, two tracks, ratio decides the split =====
+
+$ kubectl apply -f manifests/strategies/canary-deployment-stable.yaml -f manifests/strategies/canary-service.yaml
+deployment.apps/app-stable created
+service/myapp-canary-service created
+
+$ kubectl -n strategies rollout status deployment/app-stable --timeout=180s
+Waiting for deployment "app-stable" rollout to finish: 0 of 9 updated replicas are available...
+Waiting for deployment "app-stable" rollout to finish: 2 of 9 updated replicas are available...
+Waiting for deployment "app-stable" rollout to finish: 4 of 9 updated replicas are available...
+Waiting for deployment "app-stable" rollout to finish: 5 of 9 updated replicas are available...
+Waiting for deployment "app-stable" rollout to finish: 8 of 9 updated replicas are available...
+deployment "app-stable" successfully rolled out
+
+$ kubectl apply -f manifests/strategies/canary-deployment-canary.yaml
+deployment.apps/app-canary created
+
+$ kubectl -n strategies rollout status deployment/app-canary --timeout=180s
+Waiting for deployment "app-canary" rollout to finish: 0 of 1 updated replicas are available...
+deployment "app-canary" successfully rolled out
+# 9 stable + 1 canary = 10 pods behind ONE service
+
+$ kubectl -n strategies get deploy app-stable app-canary
+NAME         READY   UP-TO-DATE   AVAILABLE   AGE
+app-stable   9/9     9            9           4s
+app-canary   1/1     1            1           2s
+
+$ kubectl -n strategies get endpointslices -l kubernetes.io/service-name=myapp-canary-service -o jsonpath='{.items[0].endpoints[*].addresses[0]}{"\n"}' | tr ' ' '\n' | wc -l
+      10
+# 100 requests, expect roughly 10 percent canary:
+
+$ kubectl -n strategies exec loadgen -- sh -c 'for i in $(seq 1 100); do curl -s http://myapp-canary-service/; done' | sort | uniq -c
+  13 CANARY v2
+  87 STABLE v1
+# shift the split to 30 percent: canary 3, stable 7
+
+$ kubectl -n strategies scale deployment app-canary --replicas=3
+deployment.apps/app-canary scaled
+
+$ kubectl -n strategies scale deployment app-stable --replicas=7
+deployment.apps/app-stable scaled
+
+$ kubectl -n strategies rollout status deployment/app-canary --timeout=180s
+Waiting for deployment "app-canary" rollout to finish: 1 of 3 updated replicas are available...
+Waiting for deployment "app-canary" rollout to finish: 2 of 3 updated replicas are available...
+deployment "app-canary" successfully rolled out
+
+$ kubectl -n strategies rollout status deployment/app-stable --timeout=180s
+deployment "app-stable" successfully rolled out
+
+$ kubectl -n strategies exec loadgen -- sh -c 'for i in $(seq 1 100); do curl -s http://myapp-canary-service/; done' | sort | uniq -c
+  24 CANARY v2
+  76 STABLE v1
+# abort the canary: scale it to 0, stable back to 9
+
+$ kubectl -n strategies scale deployment app-canary --replicas=0
+deployment.apps/app-canary scaled
+
+$ kubectl -n strategies scale deployment app-stable --replicas=9
+deployment.apps/app-stable scaled
+
+$ kubectl -n strategies rollout status deployment/app-stable --timeout=180s
+Waiting for deployment "app-stable" rollout to finish: 7 of 9 updated replicas are available...
+deployment "app-stable" successfully rolled out
+
+$ kubectl -n strategies exec loadgen -- sh -c 'for i in $(seq 1 20); do curl -s http://myapp-canary-service/; done' | sort | uniq -c
+  20 STABLE v1
+
+$ kubectl delete -f manifests/strategies/canary-service.yaml -f manifests/strategies/canary-deployment-canary.yaml -f manifests/strategies/canary-deployment-stable.yaml
+service "myapp-canary-service" deleted from strategies namespace
+deployment.apps "app-canary" deleted from strategies namespace
+deployment.apps "app-stable" deleted from strategies namespace
+
+===== C. RECREATE: all old pods die before any new pod starts =====
+
+$ kubectl apply -f manifests/strategies/recreate-deployment-v1.yaml -f manifests/strategies/recreate-service.yaml
+deployment.apps/app-recreate created
+service/app-recreate-svc created
+
+$ kubectl -n strategies rollout status deployment/app-recreate --timeout=180s
+Waiting for deployment "app-recreate" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "app-recreate" rollout to finish: 2 of 3 updated replicas are available...
+deployment "app-recreate" successfully rolled out
+
+$ kubectl -n strategies get pods -l app=app-recreate --no-headers
+app-recreate-6cd5dfb884-h7dzx   1/1   Running   0     4s
+app-recreate-6cd5dfb884-j6qk4   1/1   Running   0     4s
+app-recreate-6cd5dfb884-jdj5f   1/1   Running   0     4s
+# starting a continuous curl loop in the client pod, then applying v2.
+# each line is one request, half a second apart. OUTAGE means no backend answered.
+
+$ for i in $(seq 1 60); do curl -s -m 1 http://app-recreate-svc/ || echo '[OUTAGE] ...'; sleep 0.5; done
+   7 VERSION: v1
+   4 [OUTAGE] connection refused / 0 pods alive
+  49 VERSION: v2 (UPGRADED)
+
+# 4 of 60 requests failed. At ~0.5s per request that is roughly 2.0 seconds of downtime.
+
+$ kubectl -n strategies get pods -l app=app-recreate --no-headers
+app-recreate-654fc4ccbc-5h8q6   1/1   Running   0     28s
+app-recreate-654fc4ccbc-8njqn   1/1   Running   0     28s
+app-recreate-654fc4ccbc-fxwpf   1/1   Running   0     28s
+
+$ kubectl -n strategies rollout history deployment/app-recreate
+deployment.apps/app-recreate 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         <none>
+
+
+$ kubectl -n strategies rollout undo deployment/app-recreate
+Warning: resource deployments/app-recreate was previously managed with 'kubectl apply'. Rolling back will not update the kubectl.kubernetes.io/last-applied-configuration annotation, which may cause unexpected behavior on future 'kubectl apply' operations. Consider using 'kubectl apply' with your previous configuration file instead.
+deployment.apps/app-recreate rolled back
+
+$ kubectl -n strategies rollout status deployment/app-recreate --timeout=180s
+Waiting for deployment "app-recreate" rollout to finish: 0 out of 3 new replicas have been updated...
+Waiting for deployment "app-recreate" rollout to finish: 0 out of 3 new replicas have been updated...
+Waiting for deployment "app-recreate" rollout to finish: 0 out of 3 new replicas have been updated...
+Waiting for deployment "app-recreate" rollout to finish: 0 out of 3 new replicas have been updated...
+Waiting for deployment "app-recreate" rollout to finish: 0 out of 3 new replicas have been updated...
+Waiting for deployment "app-recreate" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "app-recreate" rollout to finish: 2 of 3 updated replicas are available...
+deployment "app-recreate" successfully rolled out
+
+$ kubectl -n strategies exec loadgen -- curl -s http://app-recreate-svc/
+VERSION: v1
+
+===== Done. Output saved to output-strategies.log =====

@@ -1,0 +1,20 @@
+# Graceful termination. Traps SIGTERM and takes 10s to clean up. Deleting it
+# takes about 10s instead of being instant, because the kubelet waits for the
+# grace period before sending SIGKILL.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-termination
+  namespace: lifecycle
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+    - name: graceful
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - 'trap "echo caught SIGTERM, draining for 10s; sleep 10; echo clean exit; exit 0" TERM; echo app started; while true; do sleep 1; done'
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

@@ -1,0 +1,16 @@
+# Phase: Succeeded. Runs, exits 0, is not restarted because restartPolicy
+# is Never.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-succeeded
+  namespace: lifecycle
+spec:
+  restartPolicy: Never
+  containers:
+    - name: job
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'work finished cleanly'; exit 0"]
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

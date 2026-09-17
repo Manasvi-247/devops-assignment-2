@@ -1,0 +1,16 @@
+# Short lived batch pod. restartPolicy Never so it ends at Completed instead of
+# being restarted. Used to watch ContainerCreating -> Running -> Completed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-pod
+  namespace: workloads
+spec:
+  restartPolicy: Never
+  containers:
+    - name: hello
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'Hello from Kubernetes'; sleep 8; echo 'batch work done'"]
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

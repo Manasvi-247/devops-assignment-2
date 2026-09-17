@@ -1,0 +1,54 @@
+# StatefulSet with a headless service. Each pod gets a stable ordinal name and
+# its own PersistentVolumeClaim created from volumeClaimTemplates.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: workloads
+  labels: {app: mysql}
+spec:
+  clusterIP: None
+  selector: {app: mysql}
+  ports: [{name: mysql, port: 3306, targetPort: 3306}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: workloads
+spec:
+  serviceName: mysql
+  replicas: 3
+  selector:
+    matchLabels: {app: mysql}
+  template:
+    metadata:
+      labels: {app: mysql}
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "lab-root-pw"
+          ports: [{name: mysql, containerPort: 3306}]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/mysql}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -p$MYSQL_ROOT_PASSWORD"]
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests: {cpu: "100m", memory: "512Mi"}
+            limits: {cpu: "500m", memory: "1Gi"}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

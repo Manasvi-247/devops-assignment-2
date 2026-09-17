@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-canary
+  namespace: strategies
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: myapp-canary, track: canary}
+  template:
+    metadata:
+      labels: {app: myapp-canary, track: canary}
+    spec:
+      containers:
+        - name: app
+          image: hashicorp/http-echo:1.0
+          args: ["-text=CANARY v2", "-listen=:5678"]
+          ports: [{name: http, containerPort: 5678}]
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          resources:
+            requests: {cpu: "10m", memory: "16Mi"}
+            limits: {cpu: "50m", memory: "32Mi"}

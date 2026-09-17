@@ -1,0 +1,14 @@
+# Phase: Running. The normal healthy state.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-running
+  namespace: lifecycle
+spec:
+  containers:
+    - name: web
+      image: nginx:1.29-alpine
+      ports: [{containerPort: 80}]
+      resources:
+        requests: {cpu: "25m", memory: "32Mi"}
+        limits: {cpu: "100m", memory: "64Mi"}
