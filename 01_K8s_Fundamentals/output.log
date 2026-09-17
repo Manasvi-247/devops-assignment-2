@@ -1,0 +1,209 @@
+===== 1. The cluster and its nodes =====
+
+$ kubectl cluster-info
+Kubernetes control plane is running at https://127.0.0.1:63179
+CoreDNS is running at https://127.0.0.1:63179/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+
+$ kubectl get nodes -o wide
+NAME                    STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                       KERNEL-VERSION             CONTAINER-RUNTIME
+svc-lab-control-plane   Ready    control-plane   15m   v1.37.0   172.22.0.2    <none>        Debian GNU/Linux 13 (trixie)   6.12.54-linuxkit (arm64)   containerd://2.3.4
+svc-lab-worker          Ready    <none>          15m   v1.37.0   172.22.0.4    <none>        Debian GNU/Linux 13 (trixie)   6.12.54-linuxkit (arm64)   containerd://2.3.4
+svc-lab-worker2         Ready    <none>          15m   v1.37.0   172.22.0.3    <none>        Debian GNU/Linux 13 (trixie)   6.12.54-linuxkit (arm64)   containerd://2.3.4
+
+$ kubectl version
+Client Version: v1.37.0
+Kustomize Version: v5.8.1
+Server Version: v1.37.0
+
+===== 2. Control plane: the components are themselves pods =====
+
+$ kubectl -n kube-system get pods -o wide --sort-by=.spec.nodeName
+NAME                                            READY   STATUS    RESTARTS   AGE   IP           NODE                    NOMINATED NODE   READINESS GATES
+coredns-559f6c778d-4llch                        1/1     Running   0          15m   10.244.0.4   svc-lab-control-plane   <none>           <none>
+coredns-559f6c778d-cr56z                        1/1     Running   0          15m   10.244.0.2   svc-lab-control-plane   <none>           <none>
+etcd-svc-lab-control-plane                      1/1     Running   0          15m   172.22.0.2   svc-lab-control-plane   <none>           <none>
+kindnet-s45m9                                   1/1     Running   0          15m   172.22.0.2   svc-lab-control-plane   <none>           <none>
+kube-apiserver-svc-lab-control-plane            1/1     Running   0          15m   172.22.0.2   svc-lab-control-plane   <none>           <none>
+kube-controller-manager-svc-lab-control-plane   1/1     Running   0          15m   172.22.0.2   svc-lab-control-plane   <none>           <none>
+kube-proxy-vlz77                                1/1     Running   0          15m   172.22.0.2   svc-lab-control-plane   <none>           <none>
+kube-scheduler-svc-lab-control-plane            1/1     Running   0          15m   172.22.0.2   svc-lab-control-plane   <none>           <none>
+kindnet-x6phb                                   1/1     Running   0          15m   172.22.0.4   svc-lab-worker          <none>           <none>
+kube-proxy-vnzhj                                1/1     Running   0          15m   172.22.0.4   svc-lab-worker          <none>           <none>
+kindnet-vmznc                                   1/1     Running   0          15m   172.22.0.3   svc-lab-worker2         <none>           <none>
+kube-proxy-kddsq                                1/1     Running   0          15m   172.22.0.3   svc-lab-worker2         <none>           <none>
+
+$ kubectl -n kube-system get pods -l tier=control-plane -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName,OWNER:.metadata.ownerReferences[0].kind
+NAME                                            NODE                    OWNER
+etcd-svc-lab-control-plane                      svc-lab-control-plane   Node
+kube-apiserver-svc-lab-control-plane            svc-lab-control-plane   Node
+kube-controller-manager-svc-lab-control-plane   svc-lab-control-plane   Node
+kube-scheduler-svc-lab-control-plane            svc-lab-control-plane   Node
+
+===== 3. Static pods: who owns the control plane pods =====
+
+$ docker exec svc-lab-control-plane ls -1 /etc/kubernetes/manifests/
+etcd.yaml
+kube-apiserver.yaml
+kube-controller-manager.yaml
+kube-scheduler.yaml
+
+$ kubectl -n kube-system get pod kube-apiserver-svc-lab-control-plane -o jsonpath='{.metadata.ownerReferences[0].kind}{"\n"}'
+Node
+
+===== 4. Namespaces =====
+
+$ kubectl get namespaces
+NAME                 STATUS   AGE
+default              Active   15m
+kube-node-lease      Active   15m
+kube-public          Active   15m
+kube-system          Active   15m
+local-path-storage   Active   15m
+svc-lab              Active   14m
+
+$ kubectl apply -f manifests/00-namespace.yaml
+namespace/k8s-basics created
+
+===== 5. First pod =====
+
+$ kubectl apply -f manifests/01-first-pod.yaml
+pod/first-pod created
+
+$ kubectl -n k8s-basics wait --for=condition=Ready pod/first-pod --timeout=120s
+pod/first-pod condition met
+
+$ kubectl -n k8s-basics get pod first-pod -o wide
+NAME        READY   STATUS    RESTARTS   AGE   IP            NODE             NOMINATED NODE   READINESS GATES
+first-pod   1/1     Running   0          1s    10.244.1.10   svc-lab-worker   <none>           <none>
+
+$ kubectl -n k8s-basics describe pod first-pod | sed -n '1,25p'
+Name:             first-pod
+Namespace:        k8s-basics
+Priority:         0
+Service Account:  default
+Node:             svc-lab-worker/172.22.0.4
+Start Time:       Thu, 17 Sep 2026 23:20:40 +0530
+Labels:           app=first-pod
+Annotations:      <none>
+Status:           Running
+IP:               10.244.1.10
+IPs:
+  IP:  10.244.1.10
+Containers:
+  web:
+    Container ID:   containerd://23ad4b996c07dd9fd257b61e10e954e3dce65d46898c41d34931a70a577afdc3
+    Image:          nginxdemos/nginx-hello:plain-text
+    Image ID:       docker.io/nginxdemos/nginx-hello@sha256:7444c8fe498146490bf8acaea9a0313610cfff2ab4acf16cd6555cfdf7558876
+    Port:           8080/TCP (http)
+    Host Port:      0/TCP (http)
+    State:          Running
+      Started:      Thu, 17 Sep 2026 23:20:41 +0530
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     100m
+
+===== 6. Talking to the pod, logs and exec =====
+
+$ kubectl -n k8s-basics exec first-pod -- curl -s http://localhost:8080
+Server address: ::1:8080
+Server name: first-pod
+Date: 17/Sep/2026:17:50:41 +0000
+URI: /
+Request ID: 4001b8a7a21f367c247102509fa8c18f
+
+$ kubectl -n k8s-basics logs first-pod --tail=5
+2026/09/17 17:50:41 [notice] 1#1: start worker process 36
+2026/09/17 17:50:41 [notice] 1#1: start worker process 37
+2026/09/17 17:50:41 [notice] 1#1: start worker process 38
+2026/09/17 17:50:41 [notice] 1#1: start worker process 39
+::1 - - [17/Sep/2026:17:50:41 +0000] "GET / HTTP/1.1" 200 133 "-" "curl/8.14.1" "-"
+
+===== 7. A pod is the unit: two containers sharing network and storage =====
+
+$ kubectl apply -f manifests/02-two-container-pod.yaml
+pod/shared-pod created
+
+$ kubectl -n k8s-basics wait --for=condition=Ready pod/shared-pod --timeout=120s
+pod/shared-pod condition met
+
+$ kubectl -n k8s-basics get pod shared-pod -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}'
+writer
+reader
+# the reader sees what the writer wrote, through the shared emptyDir:
+
+$ kubectl -n k8s-basics exec shared-pod -c reader -- sh -c 'sleep 5; tail -3 /data/log.txt'
+line 1 from the writer
+line 2 from the writer
+line 3 from the writer
+# both containers report the same pod IP, they share one network namespace:
+
+$ kubectl -n k8s-basics exec shared-pod -c writer -- hostname -i
+10.244.2.11
+
+$ kubectl -n k8s-basics exec shared-pod -c reader -- hostname -i
+10.244.2.11
+
+===== 8. Self healing: delete the container, kubelet restarts it =====
+
+$ kubectl -n k8s-basics get pod first-pod -o custom-columns=NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount
+NAME        RESTARTS
+first-pod   0
+
+$ docker exec svc-lab-worker crictl stop 23ad4b996c07dd9fd257b61e10e954e3dce65d46898c41d34931a70a577afdc3
+23ad4b996c07dd9fd257b61e10e954e3dce65d46898c41d34931a70a577afdc3
+
+$ kubectl -n k8s-basics get pod first-pod -o custom-columns=NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase
+NAME        RESTARTS   STATUS
+first-pod   1          Running
+
+===== 9. A bare pod is NOT self healing: delete it and nothing brings it back =====
+
+$ kubectl -n k8s-basics delete pod shared-pod
+pod "shared-pod" deleted from k8s-basics namespace
+
+$ kubectl -n k8s-basics get pods
+NAME        READY   STATUS    RESTARTS      AGE
+first-pod   1/1     Running   1 (43s ago)   57s
+
+===== 10. What the API server actually stores =====
+
+$ kubectl -n k8s-basics get pod first-pod -o yaml | sed -n '1,12p'
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","kind":"Pod","metadata":{"annotations":{},"labels":{"app":"first-pod"},"name":"first-pod","namespace":"k8s-basics"},"spec":{"containers":[{"image":"nginxdemos/nginx-hello:plain-text","name":"web","ports":[{"containerPort":8080,"name":"http"}],"resources":{"limits":{"cpu":"100m","memory":"64Mi"},"requests":{"cpu":"25m","memory":"32Mi"}}}]}}
+  creationTimestamp: "2026-09-17T17:50:40Z"
+  generation: 1
+  labels:
+    app: first-pod
+  name: first-pod
+  namespace: k8s-basics
+
+$ kubectl api-resources --namespaced=true -o name | head -20
+bindings
+configmaps
+endpoints
+events
+limitranges
+persistentvolumeclaims
+pods
+podtemplates
+replicationcontrollers
+resourcequotas
+secrets
+serviceaccounts
+services
+controllerrevisions.apps
+daemonsets.apps
+deployments.apps
+replicasets.apps
+statefulsets.apps
+localsubjectaccessreviews.authorization.k8s.io
+horizontalpodautoscalers.autoscaling
+
+===== Done. Output saved to output.log =====
