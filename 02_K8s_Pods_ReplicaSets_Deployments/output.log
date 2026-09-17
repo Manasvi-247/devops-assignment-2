@@ -1,0 +1,206 @@
+
+$ kubectl apply -f manifests/00-namespace.yaml
+namespace/workloads created
+
+===== 1. ReplicaSet: keeps N pods alive =====
+
+$ kubectl apply -f manifests/01-replicaset.yaml
+replicaset.apps/web-rs created
+
+$ kubectl -n workloads get rs web-rs
+NAME     DESIRED   CURRENT   READY   AGE
+web-rs   3         3         3       8s
+
+$ kubectl -n workloads get pods -l app=web-rs -o wide
+NAME           READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+web-rs-mp5vp   1/1     Running   0          8s    10.244.1.21   svc-lab-worker    <none>           <none>
+web-rs-p75dg   1/1     Running   0          8s    10.244.1.20   svc-lab-worker    <none>           <none>
+web-rs-sg498   1/1     Running   0          8s    10.244.2.22   svc-lab-worker2   <none>           <none>
+# every pod is owned by the replicaset:
+
+$ kubectl -n workloads get pods -l app=web-rs -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].name,KIND:.metadata.ownerReferences[0].kind
+NAME           OWNER    KIND
+web-rs-mp5vp   web-rs   ReplicaSet
+web-rs-p75dg   web-rs   ReplicaSet
+web-rs-sg498   web-rs   ReplicaSet
+
+===== 2. Delete a pod: the replicaset replaces it =====
+
+$ kubectl -n workloads delete pod web-rs-mp5vp
+pod "web-rs-mp5vp" deleted from workloads namespace
+
+$ kubectl -n workloads get pods -l app=web-rs
+NAME           READY   STATUS    RESTARTS   AGE
+web-rs-8v2lq   1/1     Running   0          8s
+web-rs-p75dg   1/1     Running   0          16s
+web-rs-sg498   1/1     Running   0          16s
+
+===== 3. Scaling a replicaset =====
+
+$ kubectl -n workloads scale rs/web-rs --replicas=5
+replicaset.apps/web-rs scaled
+
+$ kubectl -n workloads get rs web-rs
+NAME     DESIRED   CURRENT   READY   AGE
+web-rs   5         5         5       22s
+
+$ kubectl -n workloads delete rs web-rs
+replicaset.apps "web-rs" deleted from workloads namespace
+
+===== 4. Deployment: a controller that manages replicasets =====
+
+$ kubectl apply -f manifests/02-deployment-v1.yaml
+deployment.apps/web created
+
+$ kubectl -n workloads rollout status deployment/web --timeout=180s
+Waiting for deployment "web" rollout to finish: 0 of 4 updated replicas are available...
+Waiting for deployment "web" rollout to finish: 1 of 4 updated replicas are available...
+Waiting for deployment "web" rollout to finish: 2 of 4 updated replicas are available...
+deployment "web" successfully rolled out
+
+$ kubectl -n workloads get deployment web
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+web    4/4     4            4           4s
+
+$ kubectl -n workloads get rs -l app=web
+NAME             DESIRED   CURRENT   READY   AGE
+web-6789f69948   4         4         4       4s
+
+$ kubectl -n workloads get pods -l app=web -o wide
+NAME                   READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+web-6789f69948-frnm9   1/1     Running   0          4s    10.244.1.24   svc-lab-worker    <none>           <none>
+web-6789f69948-s7mw9   1/1     Running   0          4s    10.244.1.25   svc-lab-worker    <none>           <none>
+web-6789f69948-tnq9c   1/1     Running   0          4s    10.244.2.25   svc-lab-worker2   <none>           <none>
+web-6789f69948-vwgcn   1/1     Running   0          4s    10.244.2.24   svc-lab-worker2   <none>           <none>
+# ownership chain: deployment -> replicaset -> pod
+
+$ kubectl -n workloads get pods -l app=web -o custom-columns=POD:.metadata.name,OWNER:.metadata.ownerReferences[0].name,KIND:.metadata.ownerReferences[0].kind | head -3
+POD                    OWNER            KIND
+web-6789f69948-frnm9   web-6789f69948   ReplicaSet
+web-6789f69948-s7mw9   web-6789f69948   ReplicaSet
+
+$ kubectl -n workloads get rs -l app=web -o custom-columns=RS:.metadata.name,OWNER:.metadata.ownerReferences[0].name,KIND:.metadata.ownerReferences[0].kind
+RS               OWNER   KIND
+web-6789f69948   web     Deployment
+
+===== 5. Rolling update to v2 =====
+
+$ kubectl apply -f manifests/03-deployment-v2.yaml
+deployment.apps/web configured
+
+$ kubectl -n workloads rollout status deployment/web --timeout=180s
+Waiting for deployment "web" rollout to finish: 2 out of 4 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 2 out of 4 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 2 out of 4 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 2 out of 4 new replicas have been updated...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "web" rollout to finish: 1 old replicas are pending termination...
+deployment "web" successfully rolled out
+# two replicasets now: the old one scaled to 0, the new one at 4
+
+$ kubectl -n workloads get rs -l app=web
+NAME             DESIRED   CURRENT   READY   AGE
+web-66d744c6cf   4         4         4       8s
+web-6789f69948   0         0         0       12s
+
+$ kubectl -n workloads get pods -l app=web -o custom-columns=POD:.metadata.name,IMAGE:.spec.containers[0].image,VERSION:.metadata.labels.version
+POD                    IMAGE               VERSION
+web-66d744c6cf-8wb52   nginx:1.29-alpine   v2
+web-66d744c6cf-c5hlt   nginx:1.29-alpine   v2
+web-66d744c6cf-fc2tp   nginx:1.29-alpine   v2
+web-66d744c6cf-gfp75   nginx:1.29-alpine   v2
+web-6789f69948-s7mw9   nginx:1.27-alpine   v1
+
+$ kubectl -n workloads rollout history deployment/web
+deployment.apps/web 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         <none>
+
+
+===== 6. A rollout that fails: bad image tag =====
+
+$ kubectl apply -f manifests/04-deployment-broken.yaml
+deployment.apps/web configured
+
+$ kubectl -n workloads rollout status deployment/web --timeout=20s || true
+Waiting for deployment "web" rollout to finish: 2 out of 4 new replicas have been updated...
+error: timed out waiting for the condition
+
+$ kubectl -n workloads get pods -l app=web
+NAME                   READY   STATUS             RESTARTS   AGE
+web-66d744c6cf-c5hlt   1/1     Running            0          48s
+web-66d744c6cf-fc2tp   1/1     Running            0          44s
+web-66d744c6cf-gfp75   1/1     Running            0          48s
+web-69d9b65857-257p9   0/1     ImagePullBackOff   0          40s
+web-69d9b65857-qr9cl   0/1     ErrImagePull       0          40s
+
+$ kubectl -n workloads get deployment web
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+web    3/4     2            3           52s
+# the old pods are still serving. maxUnavailable=1 protected them:
+
+$ kubectl -n workloads get pods -l app=web -o custom-columns=POD:.metadata.name,VERSION:.metadata.labels.version,STATUS:.status.phase,READY:.status.containerStatuses[0].ready
+POD                    VERSION     STATUS    READY
+web-66d744c6cf-c5hlt   v2          Running   true
+web-66d744c6cf-fc2tp   v2          Running   true
+web-66d744c6cf-gfp75   v2          Running   true
+web-69d9b65857-257p9   v3-broken   Pending   false
+web-69d9b65857-qr9cl   v3-broken   Pending   false
+
+===== 7. Rollback =====
+
+$ kubectl -n workloads rollout undo deployment/web
+Warning: resource deployments/web was previously managed with 'kubectl apply'. Rolling back will not update the kubectl.kubernetes.io/last-applied-configuration annotation, which may cause unexpected behavior on future 'kubectl apply' operations. Consider using 'kubectl apply' with your previous configuration file instead.
+deployment.apps/web rolled back
+
+$ kubectl -n workloads rollout status deployment/web --timeout=180s
+Waiting for deployment "web" rollout to finish: 3 of 4 updated replicas are available...
+Waiting for deployment "web" rollout to finish: 3 of 4 updated replicas are available...
+Waiting for deployment "web" rollout to finish: 3 of 4 updated replicas are available...
+deployment "web" successfully rolled out
+
+$ kubectl -n workloads get pods -l app=web -o custom-columns=POD:.metadata.name,IMAGE:.spec.containers[0].image,VERSION:.metadata.labels.version
+POD                    IMAGE               VERSION
+web-66d744c6cf-c5hlt   nginx:1.29-alpine   v2
+web-66d744c6cf-fc2tp   nginx:1.29-alpine   v2
+web-66d744c6cf-gfp75   nginx:1.29-alpine   v2
+web-66d744c6cf-z8jzv   nginx:1.29-alpine   v2
+
+$ kubectl -n workloads rollout history deployment/web
+deployment.apps/web 
+REVISION  CHANGE-CAUSE
+1         <none>
+3         <none>
+4         <none>
+
+
+===== 8. DaemonSet: exactly one pod per worker node =====
+
+$ kubectl apply -f manifests/05-daemonset.yaml
+daemonset.apps/node-agent created
+
+$ kubectl -n workloads rollout status daemonset/node-agent --timeout=180s
+Waiting for daemon set "node-agent" rollout to finish: 0 of 2 updated pods are available...
+daemon set "node-agent" successfully rolled out
+
+$ kubectl -n workloads get daemonset node-agent
+NAME         DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+node-agent   2         2         2       2            2           <none>          1s
+
+$ kubectl -n workloads get pods -l app=node-agent -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName
+POD                NODE
+node-agent-42w89   svc-lab-worker
+node-agent-chbld   svc-lab-worker2
+# for comparison, the nodes in the cluster:
+
+$ kubectl get nodes
+NAME                    STATUS   ROLES           AGE   VERSION
+svc-lab-control-plane   Ready    control-plane   22m   v1.37.0
+svc-lab-worker          Ready    <none>          22m   v1.37.0
+svc-lab-worker2         Ready    <none>          22m   v1.37.0
+
+===== Done. Output saved to output.log =====

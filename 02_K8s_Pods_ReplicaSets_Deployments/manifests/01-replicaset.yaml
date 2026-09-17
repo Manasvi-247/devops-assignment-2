@@ -1,0 +1,27 @@
+# A bare ReplicaSet, to see what a Deployment is built on top of.
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: web-rs
+  namespace: workloads
+  labels:
+    app: web-rs
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web-rs
+  template:
+    metadata:
+      labels:
+        app: web-rs
+    spec:
+      containers:
+        - name: web
+          image: nginxdemos/nginx-hello:plain-text
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "100m", memory: "64Mi"}

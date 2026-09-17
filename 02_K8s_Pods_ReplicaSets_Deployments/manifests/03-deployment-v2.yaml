@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: workloads
+  labels:
+    app: web
+spec:
+  replicas: 4
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        version: v2
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.29-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "100m", memory: "64Mi"}
