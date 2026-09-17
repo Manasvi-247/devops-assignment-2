@@ -16,7 +16,13 @@ that file.
 
 | # | Topic | Session | README |
 |---|---|---|---|
-| 1 | Kubernetes Services (ClusterIP) | Session 11 | [01_K8s_Services/README.md](01_K8s_Services/README.md) |
+| 1 | Kubernetes Fundamentals | Session 9 | [01_K8s_Fundamentals/README.md](01_K8s_Fundamentals/README.md) |
+| 2 | Kubernetes Pods, ReplicaSets and Deployments | Session 10 | [02_K8s_Pods_ReplicaSets_Deployments/README.md](02_K8s_Pods_ReplicaSets_Deployments/README.md) |
+| 3 | Kubernetes Networking and Services | Session 11 | [03_K8s_Networking_Services/README.md](03_K8s_Networking_Services/README.md) |
+| 4 | Kubernetes Ingress, ConfigMaps and Secrets | Session 12 | [04_K8s_Ingress_ConfigMaps_Secrets/README.md](04_K8s_Ingress_ConfigMaps_Secrets/README.md) |
+
+Sessions 1 to 7 (Linux, shell scripting, networking, git, Docker) are in the
+first assignment repo: <https://github.com/Manasvi-247/devops>
 
 ## Environment
 
@@ -43,16 +49,3 @@ svc-lab-worker2         Ready    <none>          32s   v1.37.0   172.22.0.3    <
 
 Two workers on purpose, so pods behind a service land on different nodes and the
 traffic actually crosses a node boundary instead of staying local.
-
-## Repo conventions
-
-Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
-The rules are in [CLAUDE.md](CLAUDE.md) and enforced by the hook in
-[.githooks/commit-msg](.githooks/commit-msg):
-
-```bash
-git config core.hooksPath .githooks
-```
-
-The hook rejects a commit whose subject is not `<type>(<scope>): <subject>`, and
-it also rejects any attribution trailer in the message body.
