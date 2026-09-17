@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Install:  cp commit-msg .git/hooks/commit-msg && chmod +x .git/hooks/commit-msg
+#
+# Rejects: AI attribution trailers, and subjects that are not Conventional Commits.
+set -euo pipefail
+
+MSG_FILE="$1"
+# strip comment lines so the template/verbose diff is not scanned
+BODY="$(grep -v '^#' "$MSG_FILE" || true)"
+SUBJECT="$(printf '%s\n' "$BODY" | sed '/^[[:space:]]*$/d' | head -n1)"
+
+fail() { printf '\n  commit rejected: %s\n\n' "$1" >&2; exit 1; }
+
+# 1. no attribution trailers
+if printf '%s' "$BODY" | grep -qiE 'co-authored-by:[[:space:]]*claude|generated with \[?claude|🤖|noreply@anthropic\.com'; then
+  fail "attribution trailer found. Remove the Co-Authored-By / Generated-with line."
+fi
+
+# 2. allow merges, reverts and fixup/squash commits through
+if printf '%s' "$SUBJECT" | grep -qE '^(Merge |Revert "|fixup!|squash!)'; then
+  exit 0
+fi
+
+# 3. conventional commit subject
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+'
+if ! printf '%s' "$SUBJECT" | grep -qE "$PATTERN"; then
+  fail "subject must be '<type>(<scope>): <subject>'
+  types: feat fix docs style refactor perf test build ci chore revert
+  yours: $SUBJECT"
+fi
+
+# 4. subject hygiene
+SUBJ_TEXT="${SUBJECT#*: }"
+[ "${#SUBJECT}" -le 72 ] || fail "subject is ${#SUBJECT} chars, keep it under 72."
+case "$SUBJ_TEXT" in
+  *.) fail "drop the trailing period from the subject." ;;
+  [A-Z]*) fail "start the subject lowercase: $SUBJ_TEXT" ;;
+esac
+
+exit 0

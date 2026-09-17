@@ -1,0 +1,12 @@
+# Local cluster used for this assignment.
+#   kind create cluster --name svc-lab --config cluster/kind-cluster.yaml
+#
+# Two workers so the pods behind the ClusterIP land on more than one node and
+# the traffic actually crosses a node boundary.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: svc-lab
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

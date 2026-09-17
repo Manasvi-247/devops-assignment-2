@@ -1,0 +1,7 @@
+# local run artefacts
+*.log
+.DS_Store
+kubeconfig
+
+# output.log is the evidence the READMEs quote, so it is tracked on purpose
+!01_K8s_Services/output.log
