@@ -1,0 +1,19 @@
+# Points at a service that does not exist, to see how the controller reports it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: broken
+  namespace: app-config
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: broken.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: no-such-service
+                port:
+                  number: 80

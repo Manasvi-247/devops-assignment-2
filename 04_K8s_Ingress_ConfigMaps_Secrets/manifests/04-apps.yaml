@@ -1,0 +1,92 @@
+# Two tiny apps behind two services, so the Ingress has something to route
+# between by path.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: site-pages
+  namespace: app-config
+data:
+  shop.conf: |
+    server {
+      listen 80;
+      location / { default_type text/plain; return 200 "SHOP app, pod $hostname\n"; }
+    }
+  admin.conf: |
+    server {
+      listen 80;
+      location / { default_type text/plain; return 200 "ADMIN app, pod $hostname\n"; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop
+  namespace: app-config
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: shop}
+  template:
+    metadata:
+      labels: {app: shop}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports: [{name: http, containerPort: 80}]
+          volumeMounts:
+            - {name: conf, mountPath: /etc/nginx/conf.d}
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "100m", memory: "64Mi"}
+      volumes:
+        - name: conf
+          configMap:
+            name: site-pages
+            items: [{key: shop.conf, path: default.conf}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop
+  namespace: app-config
+spec:
+  selector: {app: shop}
+  ports: [{name: http, port: 80, targetPort: 80}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: app-config
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: admin}
+  template:
+    metadata:
+      labels: {app: admin}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports: [{name: http, containerPort: 80}]
+          volumeMounts:
+            - {name: conf, mountPath: /etc/nginx/conf.d}
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "100m", memory: "64Mi"}
+      volumes:
+        - name: conf
+          configMap:
+            name: site-pages
+            items: [{key: admin.conf, path: default.conf}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: app-config
+spec:
+  selector: {app: admin}
+  ports: [{name: http, port: 80, targetPort: 80}]

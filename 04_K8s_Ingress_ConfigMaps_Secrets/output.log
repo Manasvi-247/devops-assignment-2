@@ -1,0 +1,230 @@
+
+$ kubectl apply -f manifests/00-namespace.yaml
+namespace/app-config created
+
+===== 1. ConfigMap and Secret: what actually gets stored =====
+
+$ kubectl apply -f manifests/01-configmap.yaml -f manifests/02-secret.yaml
+configmap/app-settings created
+secret/db-credentials created
+
+$ kubectl -n app-config get configmap app-settings -o yaml | sed -n '1,20p'
+apiVersion: v1
+data:
+  APP_NAME: checkout-service
+  APP_TIER: backend
+  LOG_LEVEL: info
+  app.properties: |
+    feature.newCheckout=true
+    feature.darkMode=false
+    cache.ttlSeconds=300
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"APP_NAME":"checkout-service","APP_TIER":"backend","LOG_LEVEL":"info","app.properties":"feature.newCheckout=true\nfeature.darkMode=false\ncache.ttlSeconds=300\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"app-settings","namespace":"app-config"}}
+  creationTimestamp: "2026-09-17T18:01:13Z"
+  name: app-settings
+  namespace: app-config
+  resourceVersion: "4976"
+  uid: 3fb0e37b-0337-4f4a-9724-fa0d9f64e78b
+# the secret was written as stringData, the API server stores it base64 encoded:
+
+$ kubectl -n app-config get secret db-credentials -o jsonpath='{.data}{"\n"}'
+{"DB_PASSWORD":"czNjcjN0LXBAc3N3MHJk","DB_USER":"Y2hlY2tvdXRfYXBw"}
+# base64 is encoding, not encryption. anyone with get on secrets can decode it:
+
+$ kubectl -n app-config get secret db-credentials -o jsonpath='{.data.DB_PASSWORD}' | base64 -d; echo
+s3cr3t-p@ssw0rd
+# kubectl describe hides secret values but shows configmap values in full:
+
+$ kubectl -n app-config describe secret db-credentials
+Name:         db-credentials
+Namespace:    app-config
+Labels:       <none>
+Annotations:  <none>
+
+Type:  Opaque
+
+Data
+====
+DB_PASSWORD:  15 bytes
+DB_USER:      12 bytes
+
+===== 2. Consuming both, as env vars and as mounted files =====
+
+$ kubectl apply -f manifests/03-consumer-pod.yaml
+pod/config-consumer created
+
+$ kubectl -n app-config wait --for=condition=Ready pod/config-consumer --timeout=120s
+pod/config-consumer condition met
+# env vars, from the configmap and from the secret:
+
+$ kubectl -n app-config exec config-consumer -- sh -c 'echo APP_NAME=$APP_NAME; echo LOG_LEVEL=$LOG_LEVEL; echo DB_PASSWORD=$DB_PASSWORD'
+APP_NAME=checkout-service
+LOG_LEVEL=info
+DB_PASSWORD=s3cr3t-p@ssw0rd
+# the configmap mounted as a directory of files:
+
+$ kubectl -n app-config exec config-consumer -- ls -l /etc/app
+total 0
+lrwxrwxrwx    1 root     root            15 Sep 17 18:01 APP_NAME -> ..data/APP_NAME
+lrwxrwxrwx    1 root     root            15 Sep 17 18:01 APP_TIER -> ..data/APP_TIER
+lrwxrwxrwx    1 root     root            16 Sep 17 18:01 LOG_LEVEL -> ..data/LOG_LEVEL
+lrwxrwxrwx    1 root     root            21 Sep 17 18:01 app.properties -> ..data/app.properties
+
+$ kubectl -n app-config exec config-consumer -- cat /etc/app/app.properties
+feature.newCheckout=true
+feature.darkMode=false
+cache.ttlSeconds=300
+# the secret mounted as files, decoded automatically, on a tmpfs:
+
+$ kubectl -n app-config exec config-consumer -- ls -l /etc/creds
+total 0
+lrwxrwxrwx    1 root     root            18 Sep 17 18:01 DB_PASSWORD -> ..data/DB_PASSWORD
+lrwxrwxrwx    1 root     root            14 Sep 17 18:01 DB_USER -> ..data/DB_USER
+
+$ kubectl -n app-config exec config-consumer -- cat /etc/creds/DB_PASSWORD; echo
+s3cr3t-p@ssw0rd
+
+$ kubectl -n app-config exec config-consumer -- df -h /etc/creds
+Filesystem                Size      Used Available Use% Mounted on
+tmpfs                    32.0M      8.0K     32.0M   0% /etc/creds
+
+===== 3. Updating config: mounted files refresh, env vars do NOT =====
+
+$ kubectl -n app-config patch configmap app-settings --type merge -p '{"data":{"LOG_LEVEL":"debug","app.properties":"feature.newCheckout=true\nfeature.darkMode=TRUE-UPDATED\ncache.ttlSeconds=900\n"}}'
+configmap/app-settings patched
+# waiting for the kubelet to sync the projected volume (up to ~60s)
+# the mounted file picked up the change:
+
+$ kubectl -n app-config exec config-consumer -- cat /etc/app/app.properties
+feature.newCheckout=true
+feature.darkMode=TRUE-UPDATED
+cache.ttlSeconds=900
+# but the env var is still the OLD value, because env is set once at start:
+
+$ kubectl -n app-config exec config-consumer -- sh -c 'echo LOG_LEVEL=$LOG_LEVEL'
+LOG_LEVEL=info
+
+$ kubectl -n app-config get configmap app-settings -o jsonpath='{.data.LOG_LEVEL}{"\n"}'
+debug
+
+===== 4. Two apps behind an Ingress =====
+
+$ kubectl apply -f manifests/04-apps.yaml
+configmap/site-pages created
+deployment.apps/shop created
+service/shop created
+deployment.apps/admin created
+service/admin created
+
+$ kubectl -n app-config rollout status deployment/shop --timeout=180s
+Waiting for deployment "shop" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "shop" rollout to finish: 1 of 2 updated replicas are available...
+deployment "shop" successfully rolled out
+
+$ kubectl -n app-config rollout status deployment/admin --timeout=180s
+deployment "admin" successfully rolled out
+
+$ kubectl -n app-config get svc shop admin
+NAME    TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+shop    ClusterIP   10.96.197.126   <none>        80/TCP    1s
+admin   ClusterIP   10.96.211.85    <none>        80/TCP    1s
+
+$ kubectl apply -f manifests/05-ingress.yaml
+ingress.networking.k8s.io/site created
+
+$ kubectl -n app-config get ingress site
+NAME   CLASS   HOSTS                    ADDRESS   PORTS   AGE
+site   nginx   shop.local,admin.local             80      8s
+
+$ kubectl -n app-config describe ingress site | sed -n '1,25p'
+Name:             site
+Labels:           <none>
+Namespace:        app-config
+Address:          
+Ingress Class:    nginx
+Default backend:  <default>
+Rules:
+  Host         Path  Backends
+  ----         ----  --------
+  shop.local   
+               /   shop:80 (10.244.1.32:80,10.244.2.33:80)
+  admin.local  
+               /   admin:80 (10.244.1.33:80)
+Annotations:   nginx.ingress.kubernetes.io/rewrite-target: /
+Events:
+  Type    Reason  Age   From                      Message
+  ----    ------  ----  ----                      -------
+  Normal  Sync    8s    nginx-ingress-controller  Scheduled for sync
+
+===== 5. Host based routing: same IP, two hosts, two apps =====
+# ingress controller ClusterIP: 10.96.191.177
+
+$ kubectl -n app-config exec config-consumer -- wget -qO- --header='Host: shop.local' http://10.96.191.177/
+SHOP app, pod shop-588b6b98d5-pfztr
+
+$ kubectl -n app-config exec config-consumer -- wget -qO- --header='Host: admin.local' http://10.96.191.177/
+ADMIN app, pod admin-67d6bb595f-5xg7q
+# no Host header at all: nothing matches, the default backend answers 404
+
+$ kubectl -n app-config exec config-consumer -- wget -S -qO- http://10.96.191.177/ 2>&1 | head -5 || true
+  HTTP/1.1 404 Not Found
+wget: server returned error: HTTP/1.1 404 Not Found
+command terminated with exit code 1
+
+===== 6. One Ingress, one IP, many services =====
+
+$ kubectl -n ingress-nginx get svc ingress-nginx-controller
+NAME                       TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+ingress-nginx-controller   NodePort   10.96.191.177   <none>        80:31280/TCP,443:31965/TCP   2m2s
+# the ingress controller is itself just a deployment of nginx pods:
+
+$ kubectl -n ingress-nginx get pods -o wide
+NAME                                        READY   STATUS      RESTARTS       AGE    IP            NODE              NOMINATED NODE   READINESS GATES
+ingress-nginx-admission-create-8dngf        0/1     Completed   0              2m1s   10.244.1.30   svc-lab-worker    <none>           <none>
+ingress-nginx-admission-patch-95bdn         0/1     Completed   2 (119s ago)   2m1s   10.244.2.31   svc-lab-worker2   <none>           <none>
+ingress-nginx-controller-746c8469d8-xbqkt   1/1     Running     0              2m1s   10.244.1.31   svc-lab-worker    <none>           <none>
+# it turns Ingress objects into nginx server blocks. proof, from its own config:
+
+$ kubectl -n ingress-nginx exec ingress-nginx-controller-746c8469d8-xbqkt -- cat /etc/nginx/nginx.conf | grep -A2 'server_name shop.local'
+		server_name shop.local ;
+		
+		http2 on;
+
+===== 7. A broken Ingress: backend service does not exist =====
+
+$ kubectl apply -f manifests/06-broken-ingress.yaml
+ingress.networking.k8s.io/broken created
+
+$ kubectl -n app-config get ingress
+NAME     CLASS   HOSTS                    ADDRESS   PORTS   AGE
+broken   nginx   broken.local                       80      8s
+site     nginx   shop.local,admin.local             80      17s
+
+$ kubectl -n app-config exec config-consumer -- wget -S -qO- --header='Host: broken.local' http://10.96.191.177/ 2>&1 | head -5 || true
+  HTTP/1.1 503 Service Temporarily Unavailable
+wget: server returned error: HTTP/1.1 503 Service Temporarily Unavailable
+command terminated with exit code 1
+# the endpoints are what is missing. the Ingress object itself looks fine:
+
+$ kubectl -n app-config describe ingress broken | sed -n '1,20p'
+Name:             broken
+Labels:           <none>
+Namespace:        app-config
+Address:          
+Ingress Class:    nginx
+Default backend:  <default>
+Rules:
+  Host          Path  Backends
+  ----          ----  --------
+  broken.local  
+                /   no-such-service:80 (<error: services "no-such-service" not found>)
+Annotations:    <none>
+Events:
+  Type    Reason  Age   From                      Message
+  ----    ------  ----  ----                      -------
+  Normal  Sync    8s    nginx-ingress-controller  Scheduled for sync
+
+===== Done. Output saved to output.log =====

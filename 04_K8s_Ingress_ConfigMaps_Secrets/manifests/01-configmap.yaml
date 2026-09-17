@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-settings
+  namespace: app-config
+data:
+  # simple key/value pairs, consumed as environment variables
+  APP_NAME: "checkout-service"
+  APP_TIER: "backend"
+  LOG_LEVEL: "info"
+  # a whole file, consumed as a mounted volume
+  app.properties: |
+    feature.newCheckout=true
+    feature.darkMode=false
+    cache.ttlSeconds=300
