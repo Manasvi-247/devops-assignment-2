@@ -1,0 +1,30 @@
+# A Service with NO selector. Nothing populates its endpoints automatically,
+# so they are written by hand to point at an address outside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-legacy-db
+  namespace: svc-lab
+spec:
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+---
+# The manual EndpointSlice. The name must be linked back to the service with
+# the kubernetes.io/service-name label.
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: external-legacy-db-manual
+  namespace: svc-lab
+  labels:
+    kubernetes.io/service-name: external-legacy-db
+addressType: IPv4
+ports:
+  - name: ""
+    protocol: TCP
+    port: 3306
+endpoints:
+  - addresses:
+      - "192.168.1.150"

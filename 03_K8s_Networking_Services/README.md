@@ -1,4 +1,4 @@
-# Session 11: Kubernetes Services (ClusterIP)
+# Kubernetes Networking and Services
 
 **Name:** Manasvi Sabbarwal
 **Roll No:** 24BCS10406
@@ -23,8 +23,14 @@ What I changed and why:
 | Added a readiness probe to the deployment | A pod joins the service endpoints only when it is Ready, not when it is merely Running. Wanted to see that. |
 | Ran it on a 2-worker cluster instead of a single node | The three backend pods get spread over both workers, so the service traffic really does cross a node boundary. |
 
-Every block of output below was copied from [`output.log`](output.log), which is
-written by [`verify.sh`](verify.sh). Nothing in this file is typed by hand.
+Covers Lecture 11: all five service types, DNS and endpoints. Every output
+block is quoted from a log file in this folder, produced by a script here and
+run against a live cluster. Nothing is typed by hand.
+
+| Script | Log | Covers |
+|---|---|---|
+| [`verify.sh`](verify.sh) | [`output.log`](output.log) | ClusterIP in depth, DNS, endpoints, load balancing, failure modes |
+| [`verify-service-types.sh`](verify-service-types.sh) | [`output-service-types.log`](output-service-types.log) | NodePort, LoadBalancer, ExternalName, headless, no-selector |
 
 ---
 
@@ -89,7 +95,13 @@ Ingress controller forwards traffic to.
 | [`01-deployment.yaml`](manifests/01-clusterip/01-deployment.yaml) | Deployment `hello-api`, 3 replicas, label `app: hello-api`, container port 8080 |
 | [`02-service.yaml`](manifests/01-clusterip/02-service.yaml) | Service `hello-api-svc`, type ClusterIP, 9090 to http (8080) |
 | [`03-client-pod.yaml`](manifests/01-clusterip/03-client-pod.yaml) | Pod `curl-box`, a client inside the cluster to test from |
-| [`verify.sh`](verify.sh) | Runs every check below and saves the raw output to `output.log` |
+| [`verify.sh`](verify.sh) | Runs the ClusterIP checks and saves the raw output to `output.log` |
+| [`02-nodeport/service.yaml`](manifests/02-nodeport/service.yaml) | NodePort service on 30080 |
+| [`03-loadbalancer/service.yaml`](manifests/03-loadbalancer/service.yaml) | LoadBalancer service, stays `<pending>` locally |
+| [`04-externalname/service.yaml`](manifests/04-externalname/service.yaml) | Two ExternalName CNAME aliases |
+| [`05-headless/statefulset.yaml`](manifests/05-headless/statefulset.yaml) | Headless service plus a StatefulSet, and a ClusterIP over the same pods |
+| [`06-no-selector/service.yaml`](manifests/06-no-selector/service.yaml) | A service with no selector and a hand written EndpointSlice |
+| [`verify-service-types.sh`](verify-service-types.sh) | Runs all of the above into `output-service-types.log` |
 
 The two fields that have to match, otherwise none of this works:
 
@@ -522,7 +534,446 @@ part of the session.
 
 ---
 
-## 9. Troubleshooting notes
+## 9. The other four service types
+
+Everything above used ClusterIP. The remaining four types are in
+[`output-service-types.log`](output-service-types.log), written by
+[`verify-service-types.sh`](verify-service-types.sh).
+
+All five, side by side, at the end of that run:
+
+```text
+$ kubectl -n svc-lab get svc
+NAME                 TYPE           CLUSTER-IP      EXTERNAL-IP                                           PORT(S)          AGE
+external-api         ExternalName   <none>          api.github.com                                        <none>           19s
+external-legacy-db   ClusterIP      10.96.13.232    <none>                                                3306/TCP         0s
+hello-api-lb         LoadBalancer   10.96.28.115    <pending>                                             80:30081/TCP     24s
+hello-api-nodeport   NodePort       10.96.119.216   <none>                                                9090:30080/TCP   35s
+hello-api-svc        ClusterIP      10.96.214.58    <none>                                                9090/TCP         77m
+legacy-db            ExternalName   <none>          my-postgres-prod.abc123.us-east-1.rds.amazonaws.com   <none>           19s
+web-clusterip        ClusterIP      10.96.12.128    <none>                                                80/TCP           18s
+web-headless         ClusterIP      None            <none>                                                80/TCP           18s
+```
+
+Three columns tell you almost everything: whether there is a `CLUSTER-IP`,
+whether it is `None`, and whether `PORT(S)` carries a second number.
+
+---
+
+## 10. NodePort
+
+```text
+$ kubectl -n svc-lab get svc hello-api-nodeport
+NAME                 TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+hello-api-nodeport   NodePort   10.96.119.216   <none>        9090:30080/TCP   11s
+
+$ kubectl -n svc-lab get svc hello-api-nodeport -o jsonpath='type={.spec.type} clusterIP={...} nodePort={...}'
+type=NodePort clusterIP=10.96.119.216 nodePort=30080
+```
+
+A NodePort **still has a ClusterIP**. It is a superset, not an alternative: the
+node port forwards to the ClusterIP, which forwards to the pods. `9090:30080`
+is those two layers printed together.
+
+The defining property is that the port opens on **every** node, including ones
+running no backend pods:
+
+```text
+$ docker exec svc-lab-control-plane curl -s -m 5 http://localhost:30080 | head -2
+Server address: 10.244.2.6:8080
+Server name: hello-api-6ddb65475c-j2vds
+
+$ docker exec svc-lab-worker curl -s -m 5 http://localhost:30080 | head -2
+Server address: 10.244.1.4:8080
+Server name: hello-api-6ddb65475c-tl64v
+
+$ docker exec svc-lab-worker2 curl -s -m 5 http://localhost:30080 | head -2
+Server address: 10.244.2.6:8080
+Server name: hello-api-6ddb65475c-j2vds
+
+# and from one node to another node's IP, to prove it is not node local:
+$ docker exec svc-lab-worker curl -s -m 5 http://172.22.0.3:30080 | head -2
+Server address: 10.244.2.6:8080
+Server name: hello-api-6ddb65475c-j2vds
+```
+
+The control-plane node answered, and it hosts no `hello-api` pod at all
+(the taint keeps them off). Its kube-proxy still has the rules, so it forwarded
+across to a worker. That is what "every node" means, and it is why a NodePort
+works behind a dumb TCP load balancer that does not know where the pods are.
+
+Worth noting the first run of this script produced **empty** responses here,
+because kube-proxy had not yet written the rules on all three nodes when the
+service was one second old. Adding a short wait fixed it. The service object
+existing and the dataplane being programmed are not the same instant.
+
+### Why it fails from the Mac
+
+```text
+$ curl -s -m 5 http://localhost:30080 || echo 'failed as expected from the host'
+failed as expected from the host
+```
+
+This is the same class of problem the course notes describe for minikube with
+the Docker driver, and the cause is identical. The nodes are Docker containers
+on an internal bridge network (`172.22.0.0/16` here). Port 30080 is open on the
+node's own network namespace, not on macOS. The Docker VM does not route that
+bridge to the host, so there is nothing listening on `localhost:30080`.
+
+Two fixes, depending on the tool:
+
+| Cluster | Fix |
+|---|---|
+| kind | create the cluster with `extraPortMappings` for the node port, which publishes it like `docker run -p` |
+| minikube (docker driver) | `minikube service <svc> --url` opens a proxy on `127.0.0.1`, or `minikube tunnel` adds host routes (needs sudo) |
+| any | `kubectl port-forward`, which goes through the API server and ignores the node network entirely |
+
+On bare metal Linux none of this applies, because the node IP is a real address
+on a real interface. The gotcha is specific to running the "nodes" inside a
+container runtime on a non-Linux host.
+
+---
+
+## 11. LoadBalancer
+
+```text
+$ kubectl -n svc-lab get svc hello-api-lb
+NAME           TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)        AGE
+hello-api-lb   LoadBalancer   10.96.103.71   <pending>     80:30081/TCP   5s
+```
+
+`EXTERNAL-IP` is `<pending>`, and on this cluster it will stay that way
+forever. That is not a failure, it is the correct behaviour: `type:
+LoadBalancer` is a **request to a cloud controller**, and no cloud controller
+is running. On EKS, GKE or AKS the provider's controller watches for this type,
+provisions a real load balancer, and writes its address back into
+`status.loadBalancer`. Nothing here does that, so the field stays empty.
+
+The important part is that the layers underneath were still created:
+
+```text
+$ kubectl -n svc-lab describe svc hello-api-lb | grep -E 'Type|IP:|Port|NodePort|Endpoints'
+Type:                     LoadBalancer
+IP:                       10.96.103.71
+Port:                     http  80/TCP
+TargetPort:               http/TCP
+NodePort:                 http  30081/TCP
+Endpoints:                10.244.1.4:8080,10.244.2.5:8080,10.244.2.6:8080
+```
+
+```text
+# the NodePort it allocated:
+$ docker exec svc-lab-worker curl -s -m 5 http://localhost:30081 | head -2
+Server address: 10.244.1.4:8080
+Server name: hello-api-6ddb65475c-tl64v
+
+# and its ClusterIP:
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://10.96.103.71/ | head -2
+Server address: 10.244.1.4:8080
+Server name: hello-api-6ddb65475c-tl64v
+```
+
+So a LoadBalancer is literally **ClusterIP plus NodePort plus an external
+request**. Each type wraps the previous one:
+
+```text
+LoadBalancer  = NodePort   + a cloud provisioned external IP
+NodePort      = ClusterIP  + the same port opened on every node
+ClusterIP     = a virtual IP and DNS name, internal only
+```
+
+Knowing this makes the `<pending>` case easy to work with locally: the service
+is fully functional inside the cluster, only the last mile is missing. On
+minikube, `minikube tunnel` fills it in by creating host routes, though it
+needs sudo and so was not run here.
+
+---
+
+## 12. ExternalName
+
+```text
+$ kubectl -n svc-lab get svc external-api legacy-db
+NAME           TYPE           CLUSTER-IP   EXTERNAL-IP                                           PORT(S)   AGE
+external-api   ExternalName   <none>       api.github.com                                        <none>    0s
+legacy-db      ExternalName   <none>       my-postgres-prod.abc123.us-east-1.rds.amazonaws.com   <none>    0s
+```
+
+No `CLUSTER-IP`, no `PORT(S)`, and:
+
+```text
+$ kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=external-api
+No resources found in svc-lab namespace.
+```
+
+No endpoints, ever. This type does not proxy anything. It is a CoreDNS entry
+and nothing else:
+
+```text
+$ kubectl -n svc-lab exec curl-box -- nslookup external-api.svc-lab.svc.cluster.local
+Server:		10.96.0.10
+Address:	10.96.0.10:53
+
+external-api.svc-lab.svc.cluster.local	canonical name = api.github.com
+Name:	api.github.com
+Address: 20.207.73.85
+```
+
+`canonical name =` is a **CNAME**. CoreDNS answers the in-cluster name with a
+redirect to the external one, the pod's resolver follows it, and the traffic
+then leaves the cluster directly. kube-proxy is not involved and no packet is
+rewritten.
+
+The second service proves it is pure DNS and involves no connectivity at all:
+
+```text
+$ kubectl -n svc-lab exec curl-box -- nslookup legacy-db.svc-lab.svc.cluster.local
+legacy-db.svc-lab.svc.cluster.local	canonical name = my-postgres-prod.abc123.us-east-1.rds.amazonaws.com
+```
+
+That RDS hostname is made up and does not resolve to anything, yet the service
+was created happily and the CNAME is returned. Kubernetes never checks the
+target.
+
+Two consequences worth knowing:
+
+- **Ports are not remapped.** There is no proxy, so a pod must use whatever
+  port the external service actually listens on. `port:` on an ExternalName
+  service is ignored.
+- **TLS will complain.** The certificate presented is for the real hostname, so
+  anything verifying the name it dialled needs the external name, not the
+  in-cluster alias.
+
+The real use is migration and environment parity: an app can always call
+`legacy-db`, and whether that resolves to an RDS instance in prod or a pod in
+dev is a one line change with no rebuild.
+
+---
+
+## 13. Headless service
+
+`clusterIP: None`, deployed next to a normal ClusterIP service selecting the
+**same three pods**, so the difference is only in the DNS answer.
+
+```text
+$ kubectl -n svc-lab get svc web-headless web-clusterip
+NAME            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+web-headless    ClusterIP   None           <none>        80/TCP    12s
+web-clusterip   ClusterIP   10.96.12.128   <none>        80/TCP    12s
+```
+
+The side by side, which is the whole point of this task:
+
+```text
+# headless returns one A record per pod:
+$ kubectl -n svc-lab exec curl-box -- nslookup web-headless.svc-lab.svc.cluster.local
+Name:	web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.64
+Name:	web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.63
+Name:	web-headless.svc-lab.svc.cluster.local
+Address: 10.244.2.62
+
+# the normal ClusterIP service returns ONE virtual IP for the same pods:
+$ kubectl -n svc-lab exec curl-box -- nslookup web-clusterip.svc-lab.svc.cluster.local
+Name:	web-clusterip.svc-lab.svc.cluster.local
+Address: 10.96.12.128
+```
+
+Three A records against one. Those three are exactly the pod IPs from
+`get pods -o wide`. With a headless service the client gets the whole
+membership list and decides for itself; with a ClusterIP the client gets one
+address and kube-proxy decides. That is the difference between **service
+discovery** and **load balancing**, and it is why every clustered database
+wants the headless form: Kafka, Cassandra and friends need to know their peers
+individually, not be balanced across them.
+
+Each pod also gets its own name:
+
+```text
+$ kubectl -n svc-lab exec curl-box -- nslookup web-stateful-0.web-headless.svc-lab.svc.cluster.local | tail -3
+Name:	web-stateful-0.web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.63
+
+$ ... web-stateful-1 ...   Address: 10.244.2.62
+$ ... web-stateful-2 ...   Address: 10.244.1.64
+```
+
+### The name survives, the IP does not
+
+```text
+$ kubectl -n svc-lab get pod web-stateful-0 -o jsonpath='before: {.status.podIP}'
+before: 10.244.1.63
+
+$ kubectl -n svc-lab delete pod web-stateful-0
+$ kubectl -n svc-lab get pod web-stateful-0 -o jsonpath='after:  {.status.podIP}'
+after:  10.244.1.65
+```
+
+Different IP, same name, and the DNS record now points at the new address. This
+is precisely why the stable name matters: peers configured with
+`web-stateful-0.web-headless` keep working across a reschedule, which they
+could not do with a hardcoded pod IP.
+
+```text
+$ kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web-headless
+NAME                 ADDRESSTYPE   PORTS   ENDPOINTS                             AGE
+web-headless-sx67b   IPv4          8080    10.244.2.62,10.244.1.64,10.244.1.65   18s
+```
+
+Headless services **do** still have EndpointSlices. The controller tracks
+membership as normal. What is missing is the virtual IP in front of them, which
+is also what CoreDNS reads to build those A records.
+
+### The port trap I hit
+
+This one cost me a while, and it is a direct consequence of "no proxy":
+
+```text
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://web-stateful-0.web-headless:80
+command terminated with exit code 7
+
+# the same pod, addressed on its REAL container port, works:
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://web-stateful-0.web-headless:8080
+Server address: 10.244.1.65:8080
+Server name: web-stateful-0
+
+# and the normal ClusterIP service on port 80 works, because it DOES proxy:
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://web-clusterip:80
+Server address: 10.244.1.65:8080
+Server name: web-stateful-0
+```
+
+Both services declare `port: 80, targetPort: 8080`. The ClusterIP one honours
+that and remaps. The headless one **cannot**, because DNS handed back the pod's
+own IP and there is no kube-proxy rule in the path to rewrite the port. So
+`port:` on a headless service is documentation only, and clients must use the
+container's real port.
+
+`Server name: web-stateful-0` on the direct call also confirms the request
+reached that specific pod, which no ClusterIP service can guarantee.
+
+---
+
+## 14. A Service with no selector
+
+Every service so far found its backends by label. This one has no selector at
+all, and its endpoints are written by hand.
+
+```text
+$ kubectl -n svc-lab get svc external-legacy-db -o jsonpath='selector={.spec.selector}'
+selector=
+
+$ kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=external-legacy-db
+NAME                        ADDRESSTYPE   PORTS   ENDPOINTS       AGE
+external-legacy-db-manual   IPv4          3306    192.168.1.150   0s
+```
+
+The EndpointSlice is an ordinary object, so nothing stops you writing one
+yourself. The only thing linking it to the service is the label:
+
+```yaml
+metadata:
+  labels:
+    kubernetes.io/service-name: external-legacy-db
+```
+
+With a selector, the endpoints controller owns that object and would overwrite
+anything you put there. With no selector, the controller leaves it alone, which
+is what makes manual endpoints possible at all.
+
+```text
+$ kubectl -n svc-lab exec curl-box -- nslookup external-legacy-db.svc-lab.svc.cluster.local | tail -3
+Name:	external-legacy-db.svc-lab.svc.cluster.local
+Address: 10.96.13.232
+```
+
+It has a normal ClusterIP and a normal DNS name. A pod connecting to
+`external-legacy-db:3306` gets kube-proxy rules pointing at `192.168.1.150`,
+which is outside the cluster entirely. (That address does not exist on this
+network, so a real connection would time out. The wiring is the point, not the
+destination.)
+
+This is the honest alternative to ExternalName when you need a real IP rather
+than a DNS alias: it gives you port remapping and a stable cluster-internal
+name in front of a database, a mainframe, or anything else not yet migrated.
+
+---
+
+## 15. Choosing a type
+
+```text
+Does anything outside the cluster need to reach it?
+│
+├── NO ──► Do clients need individual pods (peer discovery, a clustered DB)?
+│           ├── YES ──► HEADLESS  (clusterIP: None)
+│           └── NO  ──► CLUSTERIP (the default)
+│
+└── YES ─► Is the target a third party hostname (RDS, an external API)?
+            ├── YES ──► EXTERNALNAME (or a no-selector service for a raw IP)
+            └── NO  ──► On a cloud provider?
+                         ├── YES, HTTP/HTTPS ──► one INGRESS behind one
+                         │                       LOADBALANCER, apps stay ClusterIP
+                         ├── YES, raw TCP/UDP ──► LOADBALANCER per service
+                         └── NO (on prem, dev) ──► NODEPORT
+```
+
+### Why the HTTP branch says "one"
+
+A managed load balancer is billed per load balancer, roughly $18 to $25 a
+month before traffic. `type: LoadBalancer` on each of 50 microservices means 50
+of them:
+
+```text
+ANTI-PATTERN                          BETTER
+service A -> LB 1  ($25/mo)           internet -> 1 LB ($25/mo)
+service B -> LB 2  ($25/mo)                            |
+service C -> LB 3  ($25/mo)                     Ingress controller
+   ... x50                                     (routes by host and path)
+                                                 |      |      |
+                                            svc A   svc B   svc C
+                                              (all ClusterIP)
+50 x $25 = $1,250 / month             $25 / month
+```
+
+The saving is real but it is not the main argument. One entry point is also one
+place for TLS certificates, one set of access logs, one place for rate limiting
+and auth, and one DNS record to manage. Fifty load balancers means fifty of
+each. That is what
+[`../04_K8s_Ingress_ConfigMaps_Secrets`](../04_K8s_Ingress_ConfigMaps_Secrets)
+demonstrates, where a single controller fronted two services by hostname.
+
+`type: LoadBalancer` per service remains correct for non-HTTP traffic, since an
+Ingress only understands HTTP and HTTPS. A Postgres or Kafka endpoint has
+nothing to route on, so it needs its own.
+
+---
+
+## 16. Workload controllers and the services they need
+
+| | Deployment | StatefulSet | DaemonSet |
+|---|---|---|---|
+| Workload | stateless apps, APIs | clustered databases, queues | node level agents |
+| Pod names | `<name>-<hash>-<random>` | `<name>-0`, `-1`, `-2` | `<name>-<random>`, one per node |
+| Identity | disposable, new name each time | stable, survives deletion | tied to its node |
+| Start order | all at once | strictly sequential, gated on Ready | parallel across nodes |
+| Storage | shared or ephemeral | one PVC per pod via `volumeClaimTemplates` | usually hostPath |
+| Usual service | ClusterIP, or behind an Ingress | **headless**, for per pod DNS | none, or a local ClusterIP |
+| Scaling | any number, any node | ordinal, added and removed at the tail | follows the node count |
+| Examples | nginx, a Go or Node API | Kafka, MongoDB, Postgres | Fluentd, node-exporter, CNI |
+
+The pairing in the "usual service" row is the part that ties this lab to the
+last one. A Deployment's pods are interchangeable, so one virtual IP in front
+of them is exactly right. A StatefulSet's pods are not interchangeable, so a
+virtual IP would defeat the purpose and it wants the headless form instead.
+
+Both halves of that were measured: deleting a Deployment pod in
+[`../02_K8s_Pods_ReplicaSets_Deployments`](../02_K8s_Pods_ReplicaSets_Deployments)
+produced a new random name, while deleting `web-stateful-0` here brought back
+the same name on a new IP with DNS following it.
+
+---
+
+## 17. Troubleshooting notes
 
 | What you see | What is actually wrong | How to check |
 |---|---|---|
@@ -536,7 +987,7 @@ part of the session.
 
 ---
 
-## 10. What I took away
+## 18. What I took away
 
 - A service is not a process running somewhere. It is a set of packet rules that
   kube-proxy programs on every node from the EndpointSlice. Nothing listens on
@@ -553,10 +1004,26 @@ part of the session.
   28 is ports or policy.
 - Short DNS names are just the search domains in `/etc/resolv.conf`. Anything
   crossing namespaces uses the full name.
+- The types nest: LoadBalancer contains NodePort contains ClusterIP. A
+  LoadBalancer sitting at `<pending>` still works perfectly from inside.
+- A NodePort opens on every node, including ones with no backend pod. The
+  control-plane node served requests it had to forward elsewhere.
+- Creating a service and having kube-proxy program it are different moments.
+  The first run of the NodePort test returned nothing because it was one second
+  old.
+- ExternalName is only a CNAME. No IP, no endpoints, no proxying, and no
+  validation that the target exists.
+- Headless gives one A record per pod, ClusterIP gives one VIP for the same
+  pods. Discovery versus load balancing.
+- **A headless service cannot remap ports**, because nothing is in the path to
+  do it. `port: 80, targetPort: 8080` works on a ClusterIP and silently does
+  not on a headless service.
+- A service with no selector lets you write EndpointSlices by hand and point a
+  cluster DNS name at something outside the cluster.
 
 ---
 
-## 11. Screenshots
+## 19. Screenshots
 
 Terminal captures of the same run, straight from [`output.log`](output.log).
 
@@ -570,22 +1037,33 @@ Terminal captures of the same run, straight from [`output.log`](output.log).
 | Deleting a pod, the EndpointSlice updates itself | [`k11-06-endpoints-follow-pods.png`](screenshots/k11-06-endpoints-follow-pods.png) |
 | Scaled to zero: empty endpoints and curl exit 7 | [`k11-07-empty-endpoints.png`](screenshots/k11-07-empty-endpoints.png) |
 | Cross-namespace short name vs FQDN, and from the laptop | [`k11-08-clusterip-scope.png`](screenshots/k11-08-clusterip-scope.png) |
+| NodePort answering on all three nodes, and failing from the Mac | [`k11-09-nodeport.png`](screenshots/k11-09-nodeport.png) |
+| LoadBalancer stuck at `<pending>` with its inner layers working | [`k11-10-loadbalancer.png`](screenshots/k11-10-loadbalancer.png) |
+| ExternalName returning a CNAME, with no ClusterIP and no endpoints | [`k11-11-externalname.png`](screenshots/k11-11-externalname.png) |
+| Headless returning 3 pod IPs vs ClusterIP returning 1 VIP | [`k11-12-headless-vs-clusterip.png`](screenshots/k11-12-headless-vs-clusterip.png) |
+| The headless port trap: 80 refused, 8080 works | [`k11-13-headless-port-gotcha.png`](screenshots/k11-13-headless-port-gotcha.png) |
+| A service with no selector and hand written endpoints | [`k11-14-no-selector.png`](screenshots/k11-14-no-selector.png) |
+| All five service types in one table | [`k11-15-all-types.png`](screenshots/k11-15-all-types.png) |
 
 ![Load balancing across three pods](screenshots/k11-05-load-balancing.png)
 
+![Headless vs ClusterIP DNS](screenshots/k11-12-headless-vs-clusterip.png)
+
 ---
 
-## 12. Reproducing this
+## 20. Reproducing this
 
 ```bash
 kind create cluster --name svc-lab --config ../cluster/kind-cluster.yaml
-cd 01_K8s_Services
-chmod +x verify.sh && ./verify.sh
+cd 03_K8s_Networking_Services
+chmod +x verify.sh verify-service-types.sh
+./verify.sh                 # ClusterIP in depth
+./verify-service-types.sh   # the other four types
 ```
 
 `verify.sh` writes everything to `output.log`, which is what this README quotes.
 
-## 13. Cleanup
+## 21. Cleanup
 
 ```bash
 kubectl delete namespace svc-lab

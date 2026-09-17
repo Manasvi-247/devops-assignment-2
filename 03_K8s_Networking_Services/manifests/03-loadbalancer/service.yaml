@@ -1,0 +1,18 @@
+# LoadBalancer is a NodePort plus a request to the cloud provider for an
+# external IP. With no cloud controller running, EXTERNAL-IP stays <pending>
+# but the NodePort and ClusterIP layers underneath still work.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-api-lb
+  namespace: svc-lab
+  labels: {app: hello-api}
+spec:
+  type: LoadBalancer
+  selector: {app: hello-api}
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http
+      nodePort: 30081

@@ -1,0 +1,19 @@
+# ExternalName is a CNAME in CoreDNS. No ClusterIP, no selector, no endpoints,
+# no proxying. Kubernetes only answers the DNS query.
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-api
+  namespace: svc-lab
+spec:
+  type: ExternalName
+  externalName: api.github.com
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: legacy-db
+  namespace: svc-lab
+spec:
+  type: ExternalName
+  externalName: my-postgres-prod.abc123.us-east-1.rds.amazonaws.com

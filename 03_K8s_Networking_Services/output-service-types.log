@@ -1,0 +1,277 @@
+
+$ kubectl apply -f manifests/01-clusterip/
+namespace/svc-lab unchanged
+deployment.apps/hello-api unchanged
+service/hello-api-svc unchanged
+pod/curl-box unchanged
+
+$ kubectl -n svc-lab rollout status deployment/hello-api --timeout=180s
+deployment "hello-api" successfully rolled out
+
+===== 1. NodePort =====
+
+$ kubectl apply -f manifests/02-nodeport/service.yaml
+service/hello-api-nodeport created
+# giving kube-proxy a moment to program the rules on every node
+
+$ kubectl -n svc-lab get svc hello-api-nodeport
+NAME                 TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+hello-api-nodeport   NodePort   10.96.119.216   <none>        9090:30080/TCP   11s
+# PORT(S) reads 9090:30080/TCP: service port 9090, node port 30080
+# a NodePort still has a ClusterIP, it is a superset of ClusterIP:
+
+$ kubectl -n svc-lab get svc hello-api-nodeport -o jsonpath='type={.spec.type} clusterIP={.spec.clusterIP} nodePort={.spec.ports[0].nodePort}{"\n"}'
+type=NodePort clusterIP=10.96.119.216 nodePort=30080
+# the port is open on EVERY node, not just the ones running pods.
+# curling each node from inside its own container:
+
+$ docker exec svc-lab-control-plane curl -s -m 5 http://localhost:30080 | head -2
+Server address: 10.244.2.6:8080
+Server name: hello-api-6ddb65475c-j2vds
+
+$ docker exec svc-lab-worker curl -s -m 5 http://localhost:30080 | head -2
+Server address: 10.244.1.4:8080
+Server name: hello-api-6ddb65475c-tl64v
+
+$ docker exec svc-lab-worker2 curl -s -m 5 http://localhost:30080 | head -2
+Server address: 10.244.2.6:8080
+Server name: hello-api-6ddb65475c-j2vds
+# and from one node to another node's IP, to prove it is not node local:
+
+$ docker exec svc-lab-worker curl -s -m 5 http://172.22.0.3:30080 | head -2
+Server address: 10.244.2.6:8080
+Server name: hello-api-6ddb65475c-j2vds
+# from the Mac itself it is NOT reachable: kind runs nodes as containers
+# and this cluster was created without extraPortMappings for 30080.
+
+$ curl -s -m 5 http://localhost:30080 || echo 'failed as expected from the host'
+failed as expected from the host
+
+===== 2. LoadBalancer =====
+
+$ kubectl apply -f manifests/03-loadbalancer/service.yaml
+service/hello-api-lb created
+
+$ kubectl -n svc-lab get svc hello-api-lb
+NAME           TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)        AGE
+hello-api-lb   LoadBalancer   10.96.28.115   <pending>     80:30081/TCP   5s
+# EXTERNAL-IP is <pending> and stays that way: no cloud controller exists
+# on a local cluster to answer the request. on EKS/GKE/AKS this is where
+# a real load balancer would be provisioned and its IP written back.
+
+$ kubectl -n svc-lab describe svc hello-api-lb | grep -E 'Type|IP:|Port|NodePort|Endpoints|Events' 
+Type:                     LoadBalancer
+IP:                       10.96.28.115
+Port:                     http  80/TCP
+TargetPort:               http/TCP
+NodePort:                 http  30081/TCP
+Endpoints:                10.244.1.4:8080,10.244.2.5:8080,10.244.2.6:8080
+Events:                   <none>
+# the inner layers still work. the NodePort it allocated:
+
+$ docker exec svc-lab-worker curl -s -m 5 http://localhost:30081 | head -2
+Server address: 10.244.2.5:8080
+Server name: hello-api-6ddb65475c-c2hlm
+# and its ClusterIP:
+
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://10.96.28.115/ | head -2
+Server address: 10.244.1.4:8080
+Server name: hello-api-6ddb65475c-tl64v
+
+===== 3. ExternalName =====
+
+$ kubectl apply -f manifests/04-externalname/service.yaml
+service/external-api created
+service/legacy-db created
+
+$ kubectl -n svc-lab get svc external-api legacy-db
+NAME           TYPE           CLUSTER-IP   EXTERNAL-IP                                           PORT(S)   AGE
+external-api   ExternalName   <none>       api.github.com                                        <none>    0s
+legacy-db      ExternalName   <none>       my-postgres-prod.abc123.us-east-1.rds.amazonaws.com   <none>    0s
+# CLUSTER-IP is <none> and EXTERNAL-IP holds the target hostname
+
+$ kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=external-api || echo 'no endpointslices: ExternalName never has any'
+No resources found in svc-lab namespace.
+# resolving it from a pod returns a CNAME, not a service IP:
+
+$ kubectl -n svc-lab exec curl-box -- nslookup external-api.svc-lab.svc.cluster.local
+Server:		10.96.0.10
+Address:	10.96.0.10:53
+
+external-api.svc-lab.svc.cluster.local	canonical name = api.github.com
+
+external-api.svc-lab.svc.cluster.local	canonical name = api.github.com
+Name:	api.github.com
+Address: 20.207.73.85
+
+
+$ kubectl -n svc-lab exec curl-box -- nslookup legacy-db.svc-lab.svc.cluster.local
+Server:		10.96.0.10
+Address:	10.96.0.10:53
+
+legacy-db.svc-lab.svc.cluster.local	canonical name = my-postgres-prod.abc123.us-east-1.rds.amazonaws.com
+
+legacy-db.svc-lab.svc.cluster.local	canonical name = my-postgres-prod.abc123.us-east-1.rds.amazonaws.com
+
+
+===== 4. Headless service =====
+
+$ kubectl apply -f manifests/05-headless/statefulset.yaml
+service/web-headless created
+service/web-clusterip created
+statefulset.apps/web-stateful created
+
+$ kubectl -n svc-lab rollout status statefulset/web-stateful --timeout=300s
+Waiting for 3 pods to be ready...
+Waiting for 2 pods to be ready...
+Waiting for 2 pods to be ready...
+Waiting for 1 pods to be ready...
+Waiting for 1 pods to be ready...
+partitioned roll out complete: 3 new pods have been updated...
+
+$ kubectl -n svc-lab get pods -l app=web-stateful -o wide
+NAME             READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+web-stateful-0   1/1     Running   0          12s   10.244.1.63   svc-lab-worker    <none>           <none>
+web-stateful-1   1/1     Running   0          9s    10.244.2.62   svc-lab-worker2   <none>           <none>
+web-stateful-2   1/1     Running   0          5s    10.244.1.64   svc-lab-worker    <none>           <none>
+
+$ kubectl -n svc-lab get svc web-headless web-clusterip
+NAME            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+web-headless    ClusterIP   None           <none>        80/TCP    12s
+web-clusterip   ClusterIP   10.96.12.128   <none>        80/TCP    12s
+# THE SIDE BY SIDE. headless returns one A record per pod:
+
+$ kubectl -n svc-lab exec curl-box -- nslookup web-headless.svc-lab.svc.cluster.local
+Server:		10.96.0.10
+Address:	10.96.0.10:53
+
+
+Name:	web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.64
+Name:	web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.63
+Name:	web-headless.svc-lab.svc.cluster.local
+Address: 10.244.2.62
+
+# the normal ClusterIP service returns ONE virtual IP for the same pods:
+
+$ kubectl -n svc-lab exec curl-box -- nslookup web-clusterip.svc-lab.svc.cluster.local
+Server:		10.96.0.10
+Address:	10.96.0.10:53
+
+
+Name:	web-clusterip.svc-lab.svc.cluster.local
+Address: 10.96.12.128
+
+# each pod also gets its own stable DNS name:
+
+$ kubectl -n svc-lab exec curl-box -- nslookup web-stateful-0.web-headless.svc-lab.svc.cluster.local | tail -3
+Name:	web-stateful-0.web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.63
+
+
+$ kubectl -n svc-lab exec curl-box -- nslookup web-stateful-1.web-headless.svc-lab.svc.cluster.local | tail -3
+Name:	web-stateful-1.web-headless.svc-lab.svc.cluster.local
+Address: 10.244.2.62
+
+
+$ kubectl -n svc-lab exec curl-box -- nslookup web-stateful-2.web-headless.svc-lab.svc.cluster.local | tail -3
+Name:	web-stateful-2.web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.64
+
+# addressing one specific pod by name, which a ClusterIP cannot do:
+
+$ kubectl -n svc-lab exec curl-box -- curl -s http://web-stateful-0.web-headless:80 | head -2
+command terminated with exit code 7
+# the name is stable across deletion: delete web-stateful-0 and re-resolve
+
+$ kubectl -n svc-lab get pod web-stateful-0 -o jsonpath='before: {.status.podIP}{"\n"}'
+before: 10.244.1.63
+
+$ kubectl -n svc-lab delete pod web-stateful-0
+pod "web-stateful-0" deleted from svc-lab namespace
+
+$ kubectl -n svc-lab wait --for=condition=Ready pod/web-stateful-0 --timeout=180s
+pod/web-stateful-0 condition met
+
+$ kubectl -n svc-lab get pod web-stateful-0 -o jsonpath='after:  {.status.podIP}{"\n"}'
+after:  10.244.1.65
+
+$ kubectl -n svc-lab exec curl-box -- curl -s http://web-stateful-0.web-headless:80 | head -2
+command terminated with exit code 7
+# headless services DO still have endpoints, they just are not fronted by a VIP:
+
+$ kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web-headless
+NAME                 ADDRESSTYPE   PORTS   ENDPOINTS                             AGE
+web-headless-sx67b   IPv4          8080    10.244.2.62,10.244.1.64,10.244.1.65   18s
+
+===== 5. A Service with no selector, endpoints written by hand =====
+
+$ kubectl apply -f manifests/06-no-selector/service.yaml
+service/external-legacy-db created
+endpointslice.discovery.k8s.io/external-legacy-db-manual created
+
+$ kubectl -n svc-lab get svc external-legacy-db
+NAME                 TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+external-legacy-db   ClusterIP   10.96.13.232   <none>        3306/TCP   0s
+
+$ kubectl -n svc-lab get svc external-legacy-db -o jsonpath='selector={.spec.selector}{"\n"}'
+selector=
+# the selector is empty, so nothing populates endpoints automatically.
+# the EndpointSlice applied alongside it was written by hand:
+
+$ kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=external-legacy-db
+NAME                        ADDRESSTYPE   PORTS   ENDPOINTS       AGE
+external-legacy-db-manual   IPv4          3306    192.168.1.150   0s
+
+$ kubectl -n svc-lab get endpointslice external-legacy-db-manual -o jsonpath='address={.endpoints[0].addresses[0]} port={.ports[0].port}{"\n"}'
+address=192.168.1.150 port=3306
+# the in-cluster DNS name now points at infrastructure outside the cluster.
+# 192.168.1.150 does not exist on this network, so a connection just times
+# out, but the abstraction is the point: pods use one name either way.
+
+$ kubectl -n svc-lab exec curl-box -- nslookup external-legacy-db.svc-lab.svc.cluster.local | tail -3
+Name:	external-legacy-db.svc-lab.svc.cluster.local
+Address: 10.96.13.232
+
+
+===== 6. All five types side by side =====
+
+$ kubectl -n svc-lab get svc
+NAME                 TYPE           CLUSTER-IP      EXTERNAL-IP                                           PORT(S)          AGE
+external-api         ExternalName   <none>          api.github.com                                        <none>           19s
+external-legacy-db   ClusterIP      10.96.13.232    <none>                                                3306/TCP         0s
+hello-api-lb         LoadBalancer   10.96.28.115    <pending>                                             80:30081/TCP     24s
+hello-api-nodeport   NodePort       10.96.119.216   <none>                                                9090:30080/TCP   35s
+hello-api-svc        ClusterIP      10.96.214.58    <none>                                                9090/TCP         77m
+legacy-db            ExternalName   <none>          my-postgres-prod.abc123.us-east-1.rds.amazonaws.com   <none>           19s
+web-clusterip        ClusterIP      10.96.12.128    <none>                                                80/TCP           18s
+web-headless         ClusterIP      None            <none>                                                80/TCP           18s
+
+
+===== 7. Headless port gotcha: no proxy means no port remapping =====
+# the service declares port 80 -> targetPort 8080, but a headless service
+# has no proxy, so DNS hands back the POD ip and the service port is never
+# applied. connecting on 80 reaches a pod that only listens on 8080.
+
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://web-stateful-0.web-headless:80 || echo 'exit 7: nothing is listening on port 80'
+command terminated with exit code 7
+exit 7: nothing is listening on port 80
+# the same pod, addressed on its REAL container port, works:
+
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://web-stateful-0.web-headless:8080
+Server address: 10.244.1.65:8080
+Server name: web-stateful-0
+Date: 17/Sep/2026:18:53:56 +0000
+URI: /
+Request ID: a4b772410b242f9971883b023ccaefd4
+# and the normal ClusterIP service on port 80 works, because it DOES proxy:
+
+$ kubectl -n svc-lab exec curl-box -- curl -s -m 5 http://web-clusterip:80
+Server address: 10.244.1.65:8080
+Server name: web-stateful-0
+Date: 17/Sep/2026:18:53:56 +0000
+URI: /
+Request ID: 06afd9c9b88bb55fbfe2350b9dc2803b
+
+===== Done. Output saved to output-service-types.log =====
