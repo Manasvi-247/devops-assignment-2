@@ -154,11 +154,11 @@ each added on the right:
 ```text
 node:22-alpine                              234MB   build stage base
 nginx:1.27-alpine                          76.8MB   runtime base
-13_final_project_taskboard-frontend:latest 76.3MB   final image
+13_final_project_taskboard-frontend:latest 76.8MB   final image
 ```
 
-The finished image is about the size of bare nginx, because the built bundle is
-a few hundred kilobytes of static files. Everything heavy was left behind in a
+The finished image is within a rounding error of bare nginx, because the built
+bundle is a few hundred kilobytes of static files even with Ant Design in it. Everything heavy was left behind in a
 stage that is never shipped. That is smaller, faster to pull, and a much
 smaller attack surface, since a package manager and a JavaScript runtime are
 exactly the tools you do not want sitting in a production container.
@@ -788,30 +788,32 @@ Terminal captures, all rendered straight from [`output.log`](output.log):
 
 ![Prometheus metrics and pytest inside the container](screenshots/s21-08-metrics-and-pytest.png)
 
-### Browser captures still to take
+### The running application
 
-The React UI cannot be captured from a terminal log. With the stack up, open
-<http://localhost:13000> and take these five:
+Captured from the browser, since a terminal log cannot show the interface.
 
-| # | What to capture | Where |
-|---|---|---|
-| 1 | The dashboard with the four stat tiles and the task table populated | `http://localhost:13000` |
-| 2 | The "New task" modal with the form filled in | the **New task** button, top right |
-| 3 | A task row after its status has been advanced | the circular arrow button on a row |
-| 4 | The task list filtered to `DONE` | the filter tabs above the table |
-| 5 | The interactive API docs listing every endpoint | `http://localhost:18000/docs` |
+| What it shows | Capture |
+|---|---|
+| The board: sidebar filters with live counts, three stage columns, priority as a stripe | [s21-09-ui-dashboard.png](screenshots/s21-09-ui-dashboard.png) |
+| Creating a task, with validation on the title | [s21-10-ui-new-task.png](screenshots/s21-10-ui-new-task.png) |
+| Filtering to high priority, which rewrites the columns and the subtitle | [s21-11-ui-priority-filter.png](screenshots/s21-11-ui-priority-filter.png) |
+| The new task after being advanced from To do into In progress | [s21-12-ui-status-advanced.png](screenshots/s21-12-ui-status-advanced.png) |
+| Swagger UI, `POST /api/tasks` expanded with its request schema | [s21-13-ui-swagger.png](screenshots/s21-13-ui-swagger.png) |
+| ReDoc, `DELETE /api/tasks/{task_id}` with its 204 and 422 responses | [s21-14-ui-redoc.png](screenshots/s21-14-ui-redoc.png) |
 
-<!-- browser screenshot: TaskBoard dashboard at localhost:13000 showing the four stat tiles and the populated task table -->
+![The delivery board](screenshots/s21-09-ui-dashboard.png)
 
-<!-- browser screenshot: the New task modal open with title, description, priority and assignee filled in -->
+![Creating a task](screenshots/s21-10-ui-new-task.png)
 
-<!-- browser screenshot: a task row after clicking the advance button, showing the status badge changed -->
+Worth reading the three together. The board shows 11 tasks and `3 of 11`
+completed. After creating "Exam Prep" the sidebar counts read 12, and Medium
+moves from 3 to 4. Advancing it puts it at the top of In progress, which goes
+from 3 to 5 across the two steps. Nothing was reloaded by hand: each action
+calls the API and the board re-reads it.
 
-<!-- browser screenshot: the task list filtered to DONE using the filter tabs -->
-
-<!-- browser screenshot: the FastAPI Swagger UI at localhost:18000/docs listing every endpoint -->
-
----
+The two API documentation pages come free from FastAPI. Both are generated from
+the same type hints and pydantic models the endpoints already declare, so they
+cannot drift from the implementation the way a hand written API document does.
 
 ## 13. Reproducing this
 
