@@ -15,6 +15,12 @@ Two configurations in this folder:
 | [`local-demo/`](local-demo) | `local` and `random` | yes, the whole lifecycle |
 | [`aws-s3-demo/`](aws-s3-demo) | `aws` | yes, against LocalStack, see section 11 |
 
+Reference notes on the five AWS services the session covers are in
+[`aws-services/`](aws-services): [IAM](aws-services/01-iam/README.md),
+[EC2](aws-services/02-ec2/README.md), [S3](aws-services/03-s3/README.md),
+[VPC](aws-services/04-vpc/README.md) and
+[DynamoDB and RDS](aws-services/05-dynamodb-rds/README.md).
+
 The lifecycle is identical whichever provider you use, which is the point of
 the abstraction. `local-demo` creates real files on disk, so every stage of the
 workflow can be shown end to end without a cloud account.

@@ -8,6 +8,9 @@ Volumes and persistent storage, autoscaling on real CPU load, and the three
 probe types working together. Every output block is quoted from
 [`output.log`](output.log), written by [`verify.sh`](verify.sh).
 
+Written notes on the volume types are in
+[`01-kubernetes-volumes/`](01-kubernetes-volumes/README.md).
+
 The HPA section needs metrics-server, which kind does not ship:
 
 ```bash

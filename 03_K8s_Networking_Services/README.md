@@ -27,6 +27,9 @@ Covers Lecture 11: all five service types, DNS and endpoints. Every output
 block is quoted from a log file in this folder, produced by a script here and
 run against a live cluster. Nothing is typed by hand.
 
+Two topics have their own notes: [`fqdn/`](fqdn/README.md) for the DNS naming
+convention, and [`coredns/`](coredns/README.md) for the server that answers it.
+
 | Script | Log | Covers |
 |---|---|---|
 | [`verify.sh`](verify.sh) | [`output.log`](output.log) | ClusterIP in depth, DNS, endpoints, load balancing, failure modes |
