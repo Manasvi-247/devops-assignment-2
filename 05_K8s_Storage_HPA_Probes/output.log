@@ -1,0 +1,228 @@
+
+$ kubectl apply -f manifests/00-namespace.yaml
+namespace/storage-lab created
+
+===== 1. emptyDir: shared between containers, dies with the pod =====
+
+$ kubectl apply -f manifests/01-emptydir.yaml
+pod/vol-emptydir created
+
+$ kubectl -n storage-lab wait --for=condition=Ready pod/vol-emptydir --timeout=120s
+pod/vol-emptydir condition met
+# the reader sees what the writer wrote:
+
+$ kubectl -n storage-lab exec vol-emptydir -c reader -- cat /scratch/note.txt
+written by the writer
+# delete the pod and the data is gone with it
+
+$ kubectl -n storage-lab delete pod vol-emptydir
+pod "vol-emptydir" deleted from storage-lab namespace
+
+===== 2. Static PV and PVC: the binding =====
+
+$ kubectl apply -f manifests/02-pv.yaml
+persistentvolume/static-pv created
+# Available, because no claim has bound to it yet:
+
+$ kubectl get pv static-pv
+NAME        CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE
+static-pv   500Mi      RWO            Retain           Available           manual         <unset>                          0s
+
+$ kubectl apply -f manifests/03-pvc.yaml
+persistentvolumeclaim/static-pvc created
+# now Bound, and the PV records which claim took it:
+
+$ kubectl get pv static-pv
+NAME        CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                    STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE
+static-pv   500Mi      RWO            Retain           Bound    storage-lab/static-pvc   manual         <unset>                          4s
+
+$ kubectl -n storage-lab get pvc static-pvc
+NAME         STATUS   VOLUME      CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+static-pvc   Bound    static-pv   500Mi      RWO            manual         <unset>                 4s
+
+===== 3. Data outlives the pod =====
+# clearing the host directory first, so this run starts from empty
+
+$ kubectl apply -f manifests/04-pod-static.yaml
+pod/static-writer created
+
+$ kubectl -n storage-lab wait --for=condition=Ready pod/static-writer --timeout=120s
+pod/static-writer condition met
+
+$ kubectl -n storage-lab exec static-writer -- cat /data/log.txt
+written at 2026-10-07T14:59:48+00:00
+# delete the pod, recreate it, and read the file again
+
+$ kubectl -n storage-lab delete pod static-writer
+pod "static-writer" deleted from storage-lab namespace
+
+$ kubectl apply -f manifests/04-pod-static.yaml
+pod/static-writer created
+
+$ kubectl -n storage-lab wait --for=condition=Ready pod/static-writer --timeout=120s
+pod/static-writer condition met
+# the earlier line is still there, plus a new one from the replacement pod
+
+$ kubectl -n storage-lab exec static-writer -- cat /data/log.txt
+written at 2026-10-07T14:59:48+00:00
+written at 2026-10-07T15:00:20+00:00
+# both pods landed on the same node, because the PV declares nodeAffinity.
+# a hostPath volume exists on one node only, so without that the
+# replacement could be scheduled elsewhere and find an empty directory.
+
+$ kubectl -n storage-lab get pod static-writer -o jsonpath='scheduled on: {.spec.nodeName}{"\n"}'
+scheduled on: svc-lab-worker
+
+===== 4. StorageClass: dynamic provisioning =====
+
+$ kubectl get storageclass
+NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+standard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  19d
+
+$ kubectl apply -f manifests/05-dynamic-pvc.yaml
+persistentvolumeclaim/dynamic-pvc created
+# VOLUMEBINDINGMODE above is WaitForFirstConsumer, so the claim stays
+# Pending until something actually mounts it. no PV exists yet:
+
+$ kubectl -n storage-lab get pvc dynamic-pvc
+NAME          STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+dynamic-pvc   Pending                                      standard       <unset>                 5s
+# now a pod asks for it
+
+$ kubectl apply -f manifests/05b-dynamic-consumer.yaml
+pod/dynamic-user created
+
+$ kubectl -n storage-lab wait --for=condition=Ready pod/dynamic-user --timeout=180s
+pod/dynamic-user condition met
+# bound, and a PV was created automatically. nobody wrote that PV by hand:
+
+$ kubectl -n storage-lab get pvc dynamic-pvc
+NAME          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+dynamic-pvc   Bound    pvc-8c82b549-2398-49ca-a64e-70a8d016fcc6   1Gi        RWO            standard       <unset>                 11s
+
+$ kubectl get pv -o custom-columns=NAME:.metadata.name,CLAIM:.spec.claimRef.name,SC:.spec.storageClassName | grep -E 'NAME|dynamic'
+NAME                                       CLAIM          SC
+pvc-8c82b549-2398-49ca-a64e-70a8d016fcc6   dynamic-pvc    standard
+
+$ kubectl -n storage-lab exec dynamic-user -- cat /data/hello.txt
+dynamic volume works
+
+===== 5. HPA: scaling on real CPU load =====
+
+$ kubectl apply -f manifests/06-hpa-app.yaml
+configmap/hpa-demo-src created
+deployment.apps/hpa-demo created
+service/hpa-demo created
+horizontalpodautoscaler.autoscaling/hpa-demo created
+
+$ kubectl -n storage-lab rollout status deployment/hpa-demo --timeout=180s
+Waiting for deployment "hpa-demo" rollout to finish: 0 of 1 updated replicas are available...
+deployment "hpa-demo" successfully rolled out
+# baseline: 1 replica, no load
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: <unknown>/50%   1     5     1     24s
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: <unknown>/50%   1     5     1     44s
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: 1%/50%   1     5     1     65s
+# starting the load generator
+
+$ kubectl apply -f manifests/08-load-generator.yaml
+pod/load-generator created
+# watching the HPA react. TARGETS is current vs target CPU utilisation.
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: 1%/50%   1     5     1     90s
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: 400%/50%   1     5     5     115s
+
+$ kubectl -n storage-lab get pods -l app=hpa-demo --no-headers
+hpa-demo-666b9bd8f8-45k7f   1/1   Running   0     25s
+hpa-demo-666b9bd8f8-4bwtg   1/1   Running   0     25s
+hpa-demo-666b9bd8f8-7zq2k   1/1   Running   0     25s
+hpa-demo-666b9bd8f8-prx4n   1/1   Running   0     25s
+hpa-demo-666b9bd8f8-z7vd4   1/1   Running   0     115s
+
+$ kubectl -n storage-lab top pods -l app=hpa-demo
+NAME                        CPU(cores)   MEMORY(bytes)   
+hpa-demo-666b9bd8f8-45k7f   218m         11Mi            
+hpa-demo-666b9bd8f8-4bwtg   183m         11Mi            
+hpa-demo-666b9bd8f8-7zq2k   197m         11Mi            
+hpa-demo-666b9bd8f8-prx4n   189m         12Mi            
+hpa-demo-666b9bd8f8-z7vd4   323m         12Mi            
+
+$ kubectl -n storage-lab describe hpa hpa-demo | awk '/Events:/,0'
+Events:
+  Type     Reason                        Age                  From                       Message
+  ----     ------                        ----                 ----                       -------
+  Warning  FailedGetResourceMetric       100s (x2 over 115s)  horizontal-pod-autoscaler  failed to get cpu utilization: unable to get metrics for resource cpu: no metrics returned from resource metrics API
+  Warning  FailedComputeMetricsReplicas  100s (x2 over 115s)  horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get cpu resource metric value: failed to get cpu utilization: unable to get metrics for resource cpu: no metrics returned from resource metrics API
+  Warning  FailedGetResourceMetric       85s                  horizontal-pod-autoscaler  failed to get cpu utilization: did not receive metrics for targeted pods (pods might be unready)
+  Warning  FailedComputeMetricsReplicas  85s                  horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get cpu resource metric value: failed to get cpu utilization: did not receive metrics for targeted pods (pods might be unready)
+  Normal   SuccessfulRescale             25s                  horizontal-pod-autoscaler  New size: 5; reason: cpu resource utilization (percentage of request) above target
+# stopping the load and watching it scale back down
+
+$ kubectl -n storage-lab delete pod load-generator
+pod "load-generator" deleted from storage-lab namespace
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: 260%/50%   1     5     5     2m56s
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: 1%/50%   1     5     5     3m26s
+
+$ kubectl -n storage-lab get hpa hpa-demo --no-headers
+hpa-demo   Deployment/hpa-demo   cpu: 1%/50%   1     5     1     3m56s
+
+===== 6. Mini project: PVC, three probes and an HPA together =====
+
+$ kubectl apply -f manifests/07-mini-project.yaml
+persistentvolumeclaim/web-data created
+deployment.apps/web-app created
+service/web-service created
+horizontalpodautoscaler.autoscaling/web-app created
+
+$ kubectl -n storage-lab rollout status deployment/web-app --timeout=180s
+Waiting for deployment "web-app" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "web-app" rollout to finish: 1 of 2 updated replicas are available...
+deployment "web-app" successfully rolled out
+
+$ kubectl -n storage-lab get pvc web-data
+NAME       STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+web-data   Bound    pvc-31c8450c-dc08-446c-a245-936b097ebf3a   500Mi      RWO            standard       <unset>                 6s
+
+$ kubectl -n storage-lab get deploy,svc,hpa -l app=web-app
+NAME                      READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/web-app   2/2     2            2           6s
+
+NAME                  TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+service/web-service   ClusterIP   10.96.228.240   <none>        80/TCP    6s
+
+NAME                                          REFERENCE            TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/web-app   Deployment/web-app   cpu: <unknown>/50%   2         5         2          6s
+
+$ kubectl -n storage-lab get hpa web-app --no-headers
+web-app   Deployment/web-app   cpu: <unknown>/50%   2     5     2     6s
+# all three probes on the running pod:
+
+$ kubectl -n storage-lab get deploy web-app -o jsonpath='{range .spec.template.spec.containers[0]}startup={.startupProbe.httpGet.path} readiness={.readinessProbe.httpGet.path} liveness={.livenessProbe.httpGet.path}{"\n"}{end}'
+startup=/ readiness=/ liveness=/
+
+$ kubectl -n storage-lab describe pod -l app=web-app | grep -E 'Startup:|Readiness:|Liveness:' | head -3
+    Liveness:     http-get http://:http/ delay=0s timeout=1s period=10s successThreshold=1 failureThreshold=3
+    Readiness:    http-get http://:http/ delay=0s timeout=1s period=5s successThreshold=1 failureThreshold=3
+    Startup:      http-get http://:http/ delay=0s timeout=1s period=2s successThreshold=1 failureThreshold=30
+# the PVC is mounted and writable from the app:
+
+$ kubectl -n storage-lab exec web-app-7f78989475-k24xm -- sh -c 'echo persisted > /data/app.txt; cat /data/app.txt'
+persisted
+
+$ kubectl -n storage-lab exec web-app-7f78989475-k24xm -- df -h /data
+Filesystem                Size      Used Available Use% Mounted on
+/dev/vda1               910.7G     16.5G    847.9G   2% /data
+
+===== Done. Output saved to output.log =====

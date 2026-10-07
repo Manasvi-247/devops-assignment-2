@@ -1,0 +1,17 @@
+# Four parallel request loops, enough to push one replica past 50 percent.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: load-generator
+  namespace: storage-lab
+spec:
+  containers:
+    - name: load
+      image: curlimages/curl:8.7.1
+      command:
+        - sh
+        - -c
+        - 'for i in 1 2 3 4; do (while true; do curl -s -o /dev/null http://hpa-demo/; done) & done; wait'
+      resources:
+        requests: {cpu: "50m", memory: "32Mi"}
+        limits: {cpu: "500m", memory: "64Mi"}

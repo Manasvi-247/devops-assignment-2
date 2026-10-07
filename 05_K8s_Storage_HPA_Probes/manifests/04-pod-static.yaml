@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: static-writer
+  namespace: storage-lab
+spec:
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: static-pvc
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "echo \"written at $(date -Iseconds)\" >> /data/log.txt; sleep 3600"]
+      volumeMounts:
+        - {name: data, mountPath: /data}
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "50m", memory: "32Mi"}

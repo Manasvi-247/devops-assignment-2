@@ -1,0 +1,91 @@
+# CPU burner behind a service. Each request does real work, so more replicas
+# means less CPU per pod, which is what makes the HPA settle instead of
+# pinning at max. python:alpine is multi-arch, unlike registry.k8s.io/hpa-example
+# which is amd64 only and hangs under emulation on Apple Silicon.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hpa-demo-src
+  namespace: storage-lab
+data:
+  server.py: |
+    import hashlib
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            h = b"seed"
+            for _ in range(60000):
+                h = hashlib.sha256(h).digest()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK\n")
+
+        def log_message(self, *args):
+            pass
+
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-demo
+  namespace: storage-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: hpa-demo}
+  template:
+    metadata:
+      labels: {app: hpa-demo}
+    spec:
+      volumes:
+        - name: src
+          configMap: {name: hpa-demo-src}
+      containers:
+        - name: web
+          image: python:3.12-alpine
+          command: ["python", "/src/server.py"]
+          volumeMounts:
+            - {name: src, mountPath: /src}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            tcpSocket: {port: http}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "100m", memory: "64Mi"}
+            limits: {cpu: "400m", memory: "128Mi"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpa-demo
+  namespace: storage-lab
+spec:
+  selector: {app: hpa-demo}
+  ports: [{name: http, port: 80, targetPort: 8080}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-demo
+  namespace: storage-lab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hpa-demo
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30

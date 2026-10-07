@@ -1,0 +1,83 @@
+# Session 13 mini project: persistence, autoscaling and all three probes on
+# one deployment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: web-data
+  namespace: storage-lab
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: storage-lab
+  labels: {app: web-app}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: web-app}
+  template:
+    metadata:
+      labels: {app: web-app}
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: web-data
+      containers:
+        - name: web
+          image: nginx:1.29-alpine
+          ports: [{name: http, containerPort: 80}]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          startupProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+  namespace: storage-lab
+  labels: {app: web-app}
+spec:
+  selector: {app: web-app}
+  ports: [{name: http, port: 80, targetPort: 80}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app
+  namespace: storage-lab
+  labels: {app: web-app}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-app
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50

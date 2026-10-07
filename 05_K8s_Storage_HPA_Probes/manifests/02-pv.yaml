@@ -1,0 +1,29 @@
+# Statically provisioned PersistentVolume backed by a directory on one node.
+#
+# nodeAffinity is required for hostPath. The directory exists on exactly one
+# node, so without it a replacement pod can be scheduled elsewhere and find
+# an empty volume. This is also why hostPath is a lab tool and not a
+# production storage backend.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: static-pv
+  labels:
+    tier: manual
+spec:
+  capacity:
+    storage: 500Mi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/static-pv
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - svc-lab-worker
