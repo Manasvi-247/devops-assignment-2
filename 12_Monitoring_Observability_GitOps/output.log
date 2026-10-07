@@ -1,0 +1,233 @@
+===== 1. The monitoring stack =====
+
+$ cat prometheus-grafana/prometheus.yml
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # Prometheus scraping itself, which is always available as a first target
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Host and container metrics
+  - job_name: node-exporter
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+$ cd prometheus-grafana && docker compose up -d --quiet-pull && cd ..
+ Network prometheus-grafana_default  Creating
+ Network prometheus-grafana_default  Created
+ Container prometheus-grafana-cadvisor-1  Creating
+ Container prometheus-grafana-prometheus-1  Creating
+ Container prometheus-grafana-node-exporter-1  Creating
+ Container prometheus-grafana-node-exporter-1  Created
+ Container prometheus-grafana-cadvisor-1  Created
+ Container prometheus-grafana-prometheus-1  Created
+ Container prometheus-grafana-grafana-1  Creating
+ Container prometheus-grafana-grafana-1  Created
+ Container prometheus-grafana-cadvisor-1  Starting
+ Container prometheus-grafana-prometheus-1  Starting
+ Container prometheus-grafana-node-exporter-1  Starting
+ Container prometheus-grafana-node-exporter-1  Started
+ Container prometheus-grafana-prometheus-1  Started
+ Container prometheus-grafana-grafana-1  Starting
+ Container prometheus-grafana-cadvisor-1  Started
+ Container prometheus-grafana-grafana-1  Started
+# waiting for prometheus to report ready
+
+$ cd prometheus-grafana && docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}' && cd ..
+SERVICE         STATUS                                     PORTS
+cadvisor        Up Less than a second (health: starting)   0.0.0.0:8081->8080/tcp, [::]:8081->8080/tcp
+grafana         Up Less than a second                      0.0.0.0:3001->3000/tcp, [::]:3001->3000/tcp
+node-exporter   Up Less than a second                      0.0.0.0:9100->9100/tcp, [::]:9100->9100/tcp
+prometheus      Up Less than a second                      0.0.0.0:9090->9090/tcp, [::]:9090->9090/tcp
+
+===== 2. Targets: what prometheus is scraping =====
+# giving the scrapers one interval to report
+
+$ curl -s 'http://localhost:9090/api/v1/targets' | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(f'{\"JOB\":16} {\"HEALTH\":8} ENDPOINT')
+for t in d['data']['activeTargets']:
+    print(f\"{t['labels']['job']:16} {t['health']:8} {t['scrapeUrl']}\")"
+JOB              HEALTH   ENDPOINT
+cadvisor         up       http://cadvisor:8080/metrics
+node-exporter    up       http://node-exporter:9100/metrics
+prometheus       up       http://localhost:9090/metrics
+
+===== 3. Querying with PromQL =====
+# up is 1 for a target that was scraped successfully, 0 if the scrape failed
+
+$ curl -s 'http://localhost:9090/api/v1/query?query=up' | python3 -c "
+import json,sys
+for r in json.load(sys.stdin)['data']['result']:
+    print(f\"up{{job={r['metric']['job']}}} = {r['value'][1]}\")"
+up{job=prometheus} = 1
+up{job=node-exporter} = 1
+up{job=cadvisor} = 1
+# a real metric: how many cpu cores the host reports
+
+$ curl -s --get 'http://localhost:9090/api/v1/query' --data-urlencode 'query=count(node_cpu_seconds_total{mode="idle"})' | python3 -c "
+import json,sys
+r=json.load(sys.stdin)['data']['result']
+print('cpu cores:', r[0]['value'][1] if r else 'no data')"
+cpu cores: 15
+# a rate over time, which is what most dashboards actually plot
+# generating some traffic first so the rate is not flat zero
+
+$ curl -s --get 'http://localhost:9090/api/v1/query' --data-urlencode 'query=topk(5, rate(prometheus_http_requests_total[1m]))' | python3 -c "
+import json,sys
+for r in json.load(sys.stdin)['data']['result']:
+    print(f\"{r['metric'].get('handler','?'):34} {float(r['value'][1]):.4f} req/s\")"
+/api/v1/query                      1.2448 req/s
+/metrics                           0.0402 req/s
+/api/v1/targets                    0.0201 req/s
+/-/reload                          0.0000 req/s
+/-/quit                            0.0000 req/s
+
+===== 4. Grafana =====
+
+$ curl -s http://localhost:3001/api/health; echo
+{
+  "database": "ok",
+  "version": "11.5.1",
+  "commit": "c6c701cf5be984b088b9d51690b474ab63ca86ff"
+}
+# the prometheus datasource was provisioned from a file, not clicked in:
+
+$ curl -s -u admin:admin http://localhost:3001/api/datasources | python3 -c "
+import json,sys
+for d in json.load(sys.stdin):
+    print(f\"{d['name']:12} {d['type']:12} {d['url']}  default={d['isDefault']}\")"
+Prometheus   prometheus   http://prometheus:9090  default=True
+# and grafana can actually reach it:
+
+$ curl -s -u admin:admin 'http://localhost:3001/api/datasources/proxy/1/api/v1/query?query=up' | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('status:', d['status'], ' series returned:', len(d['data']['result']))"
+status: success  series returned: 3
+
+===== 5. GitOps: Argo CD =====
+
+$ kubectl -n argocd get pods --no-headers
+argocd-application-controller-0                     1/1   Running   0     61m
+argocd-applicationset-controller-76fd8cdd4f-zmxpz   1/1   Running   0     61m
+argocd-dex-server-66c78cf887-z25dc                  1/1   Running   0     61m
+argocd-notifications-controller-7fb9868fd6-tqwsd    1/1   Running   0     61m
+argocd-redis-bdbdffcb4-z7lm7                        1/1   Running   0     61m
+argocd-repo-server-d89c7967d-9wzzw                  1/1   Running   0     61m
+argocd-server-776b7cdd4d-8gfbm                      1/1   Running   0     61m
+
+$ kubectl -n argocd get crd | grep argoproj
+applications.argoproj.io      Namespaced   v1alpha1(storage)   2026-10-07T17:02:53Z
+applicationsets.argoproj.io   Namespaced   v1alpha1(storage)   2026-10-07T17:02:59Z
+appprojects.argoproj.io       Namespaced   v1alpha1(storage)   2026-10-07T17:02:54Z
+
+===== 6. An Application pointing at this repository =====
+
+$ cat gitops/argocd-application.yaml
+# Points Argo CD at this repo. Argo watches the path and reconciles the
+# cluster to whatever Git says, which is the whole idea of GitOps.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitops-demo
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Manasvi-247/devops-assignment-2.git
+    targetRevision: main
+    path: 12_Monitoring_Observability_GitOps/gitops/app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gitops-demo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+$ kubectl apply -f gitops/argocd-application.yaml
+application.argoproj.io/gitops-demo created
+# argo clones the repo, reads the path, and creates what it finds there.
+# nothing below was applied by hand.
+
+$ kubectl -n argocd get application gitops-demo -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision
+NAME          SYNC     HEALTH    REVISION
+gitops-demo   Synced   Healthy   18d69b41375bc8dcba0032ac546c73e7db5f9b21
+
+$ kubectl -n gitops-demo rollout status deployment/gitops-demo --timeout=120s
+deployment "gitops-demo" successfully rolled out
+
+$ kubectl -n gitops-demo get deploy,svc,pods --no-headers
+deployment.apps/gitops-demo   2/2   2     2     10s
+service/gitops-demo   ClusterIP   10.96.80.53   <none>   80/TCP   10s
+pod/gitops-demo-8f4d87654-45wk4   1/1   Running   0     10s
+pod/gitops-demo-8f4d87654-f562k   1/1   Running   0     10s
+# argo claims these objects as its own, so they came from git, not from kubectl apply
+
+$ kubectl -n argocd get application gitops-demo -o jsonpath='{range .status.resources[*]}{.kind}/{.name} {.status}{"\n"}{end}'
+Namespace/gitops-demo Synced
+Service/gitops-demo Synced
+Deployment/gitops-demo Synced
+
+$ kubectl -n gitops-demo get deploy gitops-demo -o jsonpath='field manager: {.metadata.managedFields[0].manager}{"\n"}'
+field manager: argocd-controller
+
+===== 7. Self healing: delete something argo manages =====
+# selfHeal is on, so argo should put this back without anyone asking
+
+$ kubectl -n gitops-demo get deploy gitops-demo -o jsonpath='replicas before: {.spec.replicas}{"\n"}'
+replicas before: 2
+
+$ kubectl -n gitops-demo scale deployment gitops-demo --replicas=5
+deployment.apps/gitops-demo scaled
+
+$ kubectl -n gitops-demo get deploy gitops-demo -o jsonpath='replicas after manual edit: {.spec.replicas}{"\n"}'
+replicas after manual edit: 5
+# waiting for argo to notice the drift and reconcile
+# argo reverted it after 5s without anyone running kubectl
+
+$ kubectl -n gitops-demo get deploy gitops-demo -o jsonpath='replicas after argo reconciled: {.spec.replicas}{"\n"}'
+replicas after argo reconciled: 2
+
+$ kubectl -n argocd get application gitops-demo -o jsonpath='app sync status: {.status.sync.status}  health: {.status.health.status}{"\n"}'
+app sync status: Synced  health: Healthy
+# git said 2, so it is 2 again. the cluster was corrected, not the repo.
+
+===== 8. Teardown =====
+
+$ kubectl delete -f gitops/argocd-application.yaml
+application.argoproj.io "gitops-demo" deleted from argocd namespace
+
+$ cd prometheus-grafana && docker compose down && cd ..
+ Container prometheus-grafana-node-exporter-1  Stopping
+ Container prometheus-grafana-cadvisor-1  Stopping
+ Container prometheus-grafana-grafana-1  Stopping
+ Container prometheus-grafana-node-exporter-1  Stopped
+ Container prometheus-grafana-node-exporter-1  Removing
+ Container prometheus-grafana-node-exporter-1  Removed
+ Container prometheus-grafana-cadvisor-1  Stopped
+ Container prometheus-grafana-cadvisor-1  Removing
+ Container prometheus-grafana-cadvisor-1  Removed
+ Container prometheus-grafana-grafana-1  Stopped
+ Container prometheus-grafana-grafana-1  Removing
+ Container prometheus-grafana-grafana-1  Removed
+ Container prometheus-grafana-prometheus-1  Stopping
+ Container prometheus-grafana-prometheus-1  Stopped
+ Container prometheus-grafana-prometheus-1  Removing
+ Container prometheus-grafana-prometheus-1  Removed
+ Network prometheus-grafana_default  Removing
+ Network prometheus-grafana_default  Removed
+
+===== Done. Output saved to /Users/manasvi/Desktop/devops-assignment-2/12_Monitoring_Observability_GitOps/output.log =====

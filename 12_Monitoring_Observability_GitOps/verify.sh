@@ -42,22 +42,24 @@ for r in json.load(sys.stdin)['data']['result']:
     print(f\\\"up{{job={r['metric']['job']}}} = {r['value'][1]}\\\")\""
 
 note "a real metric: how many cpu cores the host reports"
-run "curl -s 'http://localhost:9090/api/v1/query?query=count(node_cpu_seconds_total{mode=\\\"idle\\\"})' | python3 -c \"
+run "curl -s --get 'http://localhost:9090/api/v1/query' --data-urlencode 'query=count(node_cpu_seconds_total{mode=\"idle\"})' | python3 -c \"
 import json,sys
 r=json.load(sys.stdin)['data']['result']
 print('cpu cores:', r[0]['value'][1] if r else 'no data')\""
 
 note "a rate over time, which is what most dashboards actually plot"
-run "curl -s --get 'http://localhost:9090/api/v1/query' --data-urlencode 'query=rate(prometheus_http_requests_total[1m])' | python3 -c \"
+note "generating some traffic first so the rate is not flat zero"
+for i in $(seq 1 60); do curl -s -o /dev/null "http://localhost:9090/api/v1/query?query=up"; done
+sleep 20
+run "curl -s --get 'http://localhost:9090/api/v1/query' --data-urlencode 'query=topk(5, rate(prometheus_http_requests_total[1m]))' | python3 -c \"
 import json,sys
-rows=json.load(sys.stdin)['data']['result'][:5]
-for r in rows:
+for r in json.load(sys.stdin)['data']['result']:
     print(f\\\"{r['metric'].get('handler','?'):34} {float(r['value'][1]):.4f} req/s\\\")\""
 
 echo "" | tee -a "$LOG"
 echo "===== 4. Grafana =====" | tee -a "$LOG"
 for i in $(seq 1 40); do curl -sf -m 3 http://localhost:3001/api/health >/dev/null 2>&1 && break; sleep 3; done
-run "curl -s http://localhost:3001/api/health"
+run "curl -s http://localhost:3001/api/health; echo"
 note "the prometheus datasource was provisioned from a file, not clicked in:"
 run "curl -s -u admin:admin http://localhost:3001/api/datasources | python3 -c \"
 import json,sys
@@ -81,12 +83,17 @@ run "kubectl apply -f gitops/argocd-application.yaml"
 note "argo clones the repo, reads the path, and creates what it finds there."
 note "nothing below was applied by hand."
 for i in $(seq 1 40); do
-  SYNC=$(kubectl -n argocd get application gitops-demo -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "")
-  [ "$SYNC" = "Synced" ] && break
+  SYNC=$(kubectl -n argocd get application gitops-demo -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+  HLTH=$(kubectl -n argocd get application gitops-demo -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+  [ "${SYNC:-}" = "Synced" ] && [ "${HLTH:-}" = "Healthy" ] && break
   sleep 10
 done
 run "kubectl -n argocd get application gitops-demo -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision"
+run "kubectl -n $NS rollout status deployment/gitops-demo --timeout=120s"
 run "kubectl -n $NS get deploy,svc,pods --no-headers"
+note "argo claims these objects as its own, so they came from git, not from kubectl apply"
+run "kubectl -n argocd get application gitops-demo -o jsonpath='{range .status.resources[*]}{.kind}/{.name} {.status}{\"\n\"}{end}'"
+run "kubectl -n $NS get deploy gitops-demo -o jsonpath='field manager: {.metadata.managedFields[0].manager}{\"\n\"}'"
 
 echo "" | tee -a "$LOG"
 echo "===== 7. Self healing: delete something argo manages =====" | tee -a "$LOG"
@@ -95,12 +102,15 @@ run "kubectl -n $NS get deploy gitops-demo -o jsonpath='replicas before: {.spec.
 run "kubectl -n $NS scale deployment gitops-demo --replicas=5"
 run "kubectl -n $NS get deploy gitops-demo -o jsonpath='replicas after manual edit: {.spec.replicas}{\"\n\"}'"
 note "waiting for argo to notice the drift and reconcile"
-for i in $(seq 1 30); do
-  R=$(kubectl -n $NS get deploy gitops-demo -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 9)
-  [ "$R" = "2" ] && break
-  sleep 10
+T0=$(date +%s)
+for i in $(seq 1 60); do
+  R=$(kubectl -n $NS get deploy gitops-demo -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
+  [ "${R:-}" = "2" ] && break
+  sleep 5
 done
+note "argo reverted it after $(( $(date +%s) - T0 ))s without anyone running kubectl"
 run "kubectl -n $NS get deploy gitops-demo -o jsonpath='replicas after argo reconciled: {.spec.replicas}{\"\n\"}'"
+run "kubectl -n argocd get application gitops-demo -o jsonpath='app sync status: {.status.sync.status}  health: {.status.health.status}{\"\n\"}'"
 note "git said 2, so it is 2 again. the cluster was corrected, not the repo."
 
 echo "" | tee -a "$LOG"
