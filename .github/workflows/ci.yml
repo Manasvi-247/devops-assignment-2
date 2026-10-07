@@ -14,10 +14,6 @@ on:
       - '13_Final_Project_TaskBoard/**'
   workflow_dispatch:
 
-defaults:
-  run:
-    working-directory: 13_Final_Project_TaskBoard
-
 jobs:
   test:
     name: pytest on ${{ matrix.python }}
