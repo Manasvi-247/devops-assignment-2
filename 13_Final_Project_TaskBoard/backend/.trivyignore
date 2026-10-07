@@ -1,0 +1,19 @@
+# Accepted risks, reviewed 2026-10-07, to be re-checked 2027-01-07.
+#
+# Both are in starlette, which arrives as a dependency of fastapi rather than
+# being chosen here. Upgrading does not resolve them: fastapi 0.142.2 is the
+# newest release and it resolves starlette to 0.52.1, while the fixes landed in
+# the starlette 1.x line. Pinning starlette==1.3.1 alongside fastapi gives
+# ResolutionImpossible, so there is no version pair that satisfies both.
+#
+# CVE-2026-48818  SSRF and NTLM credential theft via UNC paths in StaticFiles.
+#                 Not reachable here: this service mounts no StaticFiles, the
+#                 frontend is served by a separate nginx container.
+#
+# CVE-2026-54283  request.form() limits ignored for urlencoded bodies, a DoS.
+#                 Not reachable here: every endpoint takes JSON through
+#                 pydantic models and none calls request.form().
+#
+# Revisit when fastapi supports the starlette 1.x line.
+CVE-2026-48818
+CVE-2026-54283

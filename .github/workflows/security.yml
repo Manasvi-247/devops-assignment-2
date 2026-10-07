@@ -71,29 +71,36 @@ jobs:
       - name: Build the image to scan
         run: docker build -t taskboard-backend:scan 13_Final_Project_TaskBoard/backend
 
+      # Trivy runs from its own image rather than through the marketplace
+      # action. One less moving part, and the command is visible here.
       - name: Report every vulnerability found
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: taskboard-backend:scan
-          format: table
-          output: trivy-report.txt
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: '0'
-
-      - run: cat trivy-report.txt
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            aquasec/trivy:0.58.1 image \
+            --severity LOW,MEDIUM,HIGH,CRITICAL \
+            --exit-code 0 \
+            --format table \
+            taskboard-backend:scan | tee trivy-report.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: trivy-report
           path: trivy-report.txt
 
-      # The gate. exit-code 1 fails the job when anything HIGH or CRITICAL is
-      # present, which is what stops a vulnerable image reaching a registry.
+      # The gate. A non zero exit here fails the job, which is what stops a
+      # vulnerable image from being pushed to a registry.
       - name: Security gate, fail on HIGH or CRITICAL
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: taskboard-backend:scan
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            -v "$PWD/13_Final_Project_TaskBoard/backend/.trivyignore:/.trivyignore" \
+            aquasec/trivy:0.58.1 image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile /.trivyignore \
+            --exit-code 1 \
+            --format table \
+            taskboard-backend:scan

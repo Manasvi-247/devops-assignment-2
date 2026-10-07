@@ -1,4 +1,5 @@
-fastapi==0.115.6
+# bumped from 0.115.6, which pulled starlette 0.41.3 and CVE-2025-62727
+fastapi==0.142.2
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
 psycopg[binary]==3.2.3
