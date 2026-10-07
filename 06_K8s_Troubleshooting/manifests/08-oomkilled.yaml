@@ -1,0 +1,15 @@
+# Allocates more than its memory limit, so the kernel OOM kills it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: broken-oom
+  namespace: triage
+spec:
+  containers:
+    - name: hog
+      image: polinux/stress
+      command: ["stress"]
+      args: ["--vm", "1", "--vm-bytes", "200M", "--vm-hang", "1"]
+      resources:
+        requests: {cpu: "10m", memory: "32Mi"}
+        limits: {cpu: "100m", memory: "64Mi"}

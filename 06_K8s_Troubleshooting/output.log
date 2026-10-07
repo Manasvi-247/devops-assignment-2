@@ -1,0 +1,317 @@
+
+$ kubectl apply -f manifests/00-namespace.yaml
+namespace/triage created
+
+$ kubectl apply -f manifests/01-healthy-app.yaml -f manifests/07-client.yaml
+deployment.apps/shop created
+service/shop created
+pod/triage-client created
+
+$ kubectl -n triage rollout status deployment/shop --timeout=180s
+Waiting for deployment "shop" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "shop" rollout to finish: 1 of 2 updated replicas are available...
+deployment "shop" successfully rolled out
+
+$ kubectl -n triage wait --for=condition=Ready pod/triage-client --timeout=180s
+pod/triage-client condition met
+
+===== 1. kubectl get: the first look =====
+
+$ kubectl -n triage get pods
+NAME                    READY   STATUS    RESTARTS   AGE
+shop-6f575dbd46-bdmxd   1/1     Running   0          1s
+shop-6f575dbd46-xpbpj   1/1     Running   0          1s
+triage-client           1/1     Running   0          1s
+
+$ kubectl -n triage get pods -o wide
+NAME                    READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+shop-6f575dbd46-bdmxd   1/1     Running   0          1s    10.244.2.48   svc-lab-worker2   <none>           <none>
+shop-6f575dbd46-xpbpj   1/1     Running   0          1s    10.244.1.78   svc-lab-worker    <none>           <none>
+triage-client           1/1     Running   0          1s    10.244.2.47   svc-lab-worker2   <none>           <none>
+# wide adds IP and NODE, which is what you need when one replica misbehaves
+
+$ kubectl -n triage get all
+NAME                        READY   STATUS    RESTARTS   AGE
+pod/shop-6f575dbd46-bdmxd   1/1     Running   0          1s
+pod/shop-6f575dbd46-xpbpj   1/1     Running   0          1s
+pod/triage-client           1/1     Running   0          1s
+
+NAME           TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+service/shop   ClusterIP   10.96.181.38   <none>        80/TCP    1s
+
+NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/shop   2/2     2            2           1s
+
+NAME                              DESIRED   CURRENT   READY   AGE
+replicaset.apps/shop-6f575dbd46   2         2         2       1s
+
+===== 2. kubectl describe: spec, status and events in one place =====
+
+$ kubectl -n triage describe pod shop-6f575dbd46-bdmxd | sed -n '1,20p'
+Name:             shop-6f575dbd46-bdmxd
+Namespace:        triage
+Priority:         0
+Service Account:  default
+Node:             svc-lab-worker2/172.22.0.2
+Start Time:       Wed, 07 Oct 2026 20:35:17 +0530
+Labels:           app=shop
+                  pod-template-hash=6f575dbd46
+                  tier=web
+Annotations:      <none>
+Status:           Running
+IP:               10.244.2.48
+IPs:
+  IP:           10.244.2.48
+Controlled By:  ReplicaSet/shop-6f575dbd46
+Containers:
+  web:
+    Container ID:   containerd://3198fc0c85a6b0b9237819e91f53174ca47916a58b0ad72247a5da2c7ab13a37
+    Image:          nginxdemos/nginx-hello:plain-text
+    Image ID:       docker.io/nginxdemos/nginx-hello@sha256:7444c8fe498146490bf8acaea9a0313610cfff2ab4acf16cd6555cfdf7558876
+# the Events block at the bottom is the part that actually explains failures
+
+$ kubectl -n triage describe pod shop-6f575dbd46-bdmxd | sed -n '/Events:/,$p'
+Events:
+  Type     Reason     Age   From               Message
+  ----     ------     ----  ----               -------
+  Normal   Scheduled  1s    default-scheduler  Successfully assigned triage/shop-6f575dbd46-bdmxd to svc-lab-worker2
+  Normal   Pulled     1s    kubelet            spec.containers{web}: Container image "nginxdemos/nginx-hello:plain-text" already present on machine and can be accessed by the pod
+  Normal   Created    1s    kubelet            spec.containers{web}: Container created
+  Normal   Started    1s    kubelet            spec.containers{web}: Container started
+  Warning  Unhealthy  1s    kubelet            spec.containers{web}: Readiness probe failed: Get "http://10.244.2.48:8080/": dial tcp 10.244.2.48:8080: connect: connection refused
+
+===== 3. kubectl logs: what the application said =====
+
+$ kubectl -n triage logs shop-6f575dbd46-bdmxd --tail=5
+2026/10/07 15:05:18 [notice] 1#1: start worker process 35
+2026/10/07 15:05:18 [notice] 1#1: start worker process 36
+2026/10/07 15:05:18 [notice] 1#1: start worker process 37
+2026/10/07 15:05:18 [notice] 1#1: start worker process 38
+10.244.2.1 - - [07/Oct/2026:15:05:18 +0000] "GET / HTTP/1.1" 200 153 "-" "kube-probe/1.37" "-"
+
+$ kubectl -n triage logs -l app=shop --tail=3 --prefix
+[pod/shop-6f575dbd46-bdmxd/web] 2026/10/07 15:05:18 [notice] 1#1: start worker process 37
+[pod/shop-6f575dbd46-bdmxd/web] 2026/10/07 15:05:18 [notice] 1#1: start worker process 38
+[pod/shop-6f575dbd46-bdmxd/web] 10.244.2.1 - - [07/Oct/2026:15:05:18 +0000] "GET / HTTP/1.1" 200 153 "-" "kube-probe/1.37" "-"
+[pod/shop-6f575dbd46-xpbpj/web] 2026/10/07 15:05:18 [notice] 1#1: start worker process 37
+[pod/shop-6f575dbd46-xpbpj/web] 2026/10/07 15:05:18 [notice] 1#1: start worker process 38
+[pod/shop-6f575dbd46-xpbpj/web] 10.244.1.1 - - [07/Oct/2026:15:05:18 +0000] "GET / HTTP/1.1" 200 153 "-" "kube-probe/1.37" "-"
+
+===== 4. kubectl exec: look from inside the container =====
+
+$ kubectl -n triage exec shop-6f575dbd46-bdmxd -- hostname -i
+10.244.2.48
+
+$ kubectl -n triage exec shop-6f575dbd46-bdmxd -- ls /etc/nginx
+conf.d
+fastcgi.conf
+fastcgi_params
+mime.types
+modules
+nginx.conf
+scgi_params
+uwsgi_params
+# a request from inside the cluster, through the service:
+
+$ kubectl -n triage exec triage-client -- curl -s http://shop/ | head -2
+Server address: 10.244.2.48:8080
+Server name: shop-6f575dbd46-bdmxd
+
+===== 5. Events: the cluster's own timeline =====
+
+$ kubectl -n triage get events --sort-by=.lastTimestamp | tail -12
+2s          Normal    SuccessfulCreate    replicaset/shop-6f575dbd46   Created pod: shop-6f575dbd46-xpbpj
+1s          Warning   Unhealthy           pod/shop-6f575dbd46-bdmxd    Readiness probe failed: Get "http://10.244.2.48:8080/": dial tcp 10.244.2.48:8080: connect: connection refused
+1s          Normal    Created             pod/shop-6f575dbd46-xpbpj    Container created
+1s          Normal    Started             pod/shop-6f575dbd46-xpbpj    Container started
+1s          Warning   Unhealthy           pod/shop-6f575dbd46-xpbpj    Readiness probe failed: Get "http://10.244.1.78:8080/": dial tcp 10.244.1.78:8080: connect: connection refused
+1s          Normal    Pulled              pod/shop-6f575dbd46-xpbpj    Container image "nginxdemos/nginx-hello:plain-text" already present on machine and can be accessed by the pod
+1s          Normal    Started             pod/shop-6f575dbd46-bdmxd    Container started
+1s          Normal    Created             pod/shop-6f575dbd46-bdmxd    Container created
+1s          Normal    Pulled              pod/shop-6f575dbd46-bdmxd    Container image "nginxdemos/nginx-hello:plain-text" already present on machine and can be accessed by the pod
+1s          Normal    Pulled              pod/triage-client            Container image "curlimages/curl:8.7.1" already present on machine and can be accessed by the pod
+1s          Normal    Created             pod/triage-client            Container created
+1s          Normal    Started             pod/triage-client            Container started
+
+===== 6. Drill: CrashLoopBackOff =====
+
+$ kubectl apply -f manifests/02-crashloop.yaml
+pod/broken-crashloop created
+# step 1, the symptom
+
+$ kubectl -n triage get pod broken-crashloop --no-headers
+broken-crashloop   0/1   CrashLoopBackOff   1 (13s ago)   15s
+# step 2, the logs say exactly why. --previous reads the crashed instance
+
+$ kubectl -n triage logs broken-crashloop --previous
+FATAL: config file /etc/app/config.yaml not found
+# step 3, confirm with describe
+
+$ kubectl -n triage describe pod broken-crashloop | grep -E 'Reason|Exit Code|Restart Count' | head -4
+      Reason:       CrashLoopBackOff
+      Reason:       Error
+      Exit Code:    1
+    Restart Count:  1
+
+$ kubectl -n triage delete pod broken-crashloop
+pod "broken-crashloop" deleted from triage namespace
+
+===== 7. Drill: ImagePullBackOff, a typo in the tag =====
+
+$ kubectl apply -f manifests/03-imagepull.yaml
+pod/broken-image created
+
+$ kubectl -n triage get pod broken-image --no-headers
+broken-image   0/1   ImagePullBackOff   0     21s
+# logs are useless here, there is no container to read from:
+
+$ kubectl -n triage logs broken-image 2>&1 | head -2
+Error from server (BadRequest): container "app" in pod "broken-image" is waiting to start: trying and failing to pull image
+# describe is where the answer is:
+
+$ kubectl -n triage describe pod broken-image | grep -A4 'Events:' | tail -3
+  ----     ------     ----              ----               -------
+  Normal   Scheduled  20s               default-scheduler  Successfully assigned triage/broken-image to svc-lab-worker2
+  Normal   BackOff    18s               kubelet            spec.containers{app}: Back-off pulling image "nginx:1.29-alpne"
+# the fix: alpne -> alpine
+
+$ kubectl -n triage delete pod broken-image
+pod "broken-image" deleted from triage namespace
+
+$ kubectl apply -f manifests/03-imagepull-fixed.yaml
+pod/broken-image created
+
+$ kubectl -n triage wait --for=condition=Ready pod/broken-image --timeout=180s
+pod/broken-image condition met
+
+$ kubectl -n triage get pod broken-image --no-headers
+broken-image   1/1   Running   0     2s
+
+===== 8. Drill: Pending, nothing can schedule it =====
+
+$ kubectl apply -f manifests/04-pending.yaml
+pod/broken-pending created
+
+$ kubectl -n triage get pod broken-pending --no-headers
+broken-pending   0/1   Pending   0     10s
+
+$ kubectl -n triage describe pod broken-pending | grep -A4 'Events:'
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  10s   default-scheduler  0/3 nodes are available: 1 node(s) had untolerated taint(s), 2 Insufficient memory. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.
+# the fix: ask for an amount a node actually has
+
+$ kubectl -n triage delete pod broken-pending
+pod "broken-pending" deleted from triage namespace
+
+$ kubectl apply -f manifests/04-pending-fixed.yaml
+pod/broken-pending created
+
+$ kubectl -n triage wait --for=condition=Ready pod/broken-pending --timeout=180s
+pod/broken-pending condition met
+
+$ kubectl -n triage get pod broken-pending -o wide --no-headers
+broken-pending   1/1   Running   0     1s    10.244.2.52   svc-lab-worker2   <none>   <none>
+
+===== 9. Drill: OOMKilled =====
+
+$ kubectl apply -f manifests/08-oomkilled.yaml
+pod/broken-oom created
+
+$ kubectl -n triage get pod broken-oom --no-headers
+broken-oom   0/1   OOMKilled   2 (21s ago)   25s
+
+$ kubectl -n triage get pod broken-oom -o jsonpath='reason={.status.containerStatuses[0].lastState.terminated.reason} exitCode={.status.containerStatuses[0].lastState.terminated.exitCode}{"\n"}'
+reason=OOMKilled exitCode=137
+# it asked for 200M with a 64Mi limit. the kernel killed it, exit 137
+
+$ kubectl -n triage delete pod broken-oom
+pod "broken-oom" deleted from triage namespace
+
+===== 10. Drill: service with no endpoints =====
+
+$ kubectl apply -f manifests/05-broken-service.yaml
+service/shop-broken created
+# the service exists and looks fine
+
+$ kubectl -n triage get svc shop-broken
+NAME          TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+shop-broken   ClusterIP   10.96.177.92   <none>        80/TCP    5s
+# DNS resolves, so this is not a DNS problem
+
+$ kubectl -n triage exec triage-client -- nslookup shop-broken.triage.svc.cluster.local | tail -3
+Name:	shop-broken.triage.svc.cluster.local
+Address: 10.96.177.92
+
+# but the request fails immediately
+
+$ kubectl -n triage exec triage-client -- sh -c 'curl -s -m 5 http://shop-broken/ ; echo exit=$?'
+exit=7
+# the smoking gun: no endpoints
+
+$ kubectl -n triage get endpointslices -l kubernetes.io/service-name=shop-broken
+NAME                ADDRESSTYPE   PORTS     ENDPOINTS   AGE
+shop-broken-s4ljv   IPv4          <unset>   <unset>     5s
+# compare the selector with the pod labels
+
+$ kubectl -n triage get svc shop-broken -o jsonpath='selector: {.spec.selector}{"\n"}'
+selector: {"app":"shop","tier":"api"}
+
+$ kubectl -n triage get pods -l app=shop --show-labels --no-headers
+shop-6f575dbd46-bdmxd   1/1   Running   0     83s   app=shop,pod-template-hash=6f575dbd46,tier=web
+shop-6f575dbd46-xpbpj   1/1   Running   0     83s   app=shop,pod-template-hash=6f575dbd46,tier=web
+# tier=api vs tier=web. the fix:
+
+$ kubectl apply -f manifests/05-broken-service-fixed.yaml
+service/shop-broken configured
+
+$ kubectl -n triage get endpointslices -l kubernetes.io/service-name=shop-broken
+NAME                ADDRESSTYPE   PORTS   ENDPOINTS                 AGE
+shop-broken-s4ljv   IPv4          8080    10.244.2.48,10.244.1.78   10s
+
+$ kubectl -n triage exec triage-client -- curl -s http://shop-broken/ | head -2
+Server address: 10.244.2.48:8080
+Server name: shop-6f575dbd46-bdmxd
+
+===== 11. Drill: endpoints exist but the port is wrong =====
+
+$ kubectl apply -f manifests/06-wrong-targetport.yaml
+service/shop-wrongport created
+# endpoints are present, so the selector is fine
+
+$ kubectl -n triage get endpointslices -l kubernetes.io/service-name=shop-wrongport
+NAME                   ADDRESSTYPE   PORTS   ENDPOINTS                 AGE
+shop-wrongport-ssdb4   IPv4          9999    10.244.2.48,10.244.1.78   5s
+# yet it still fails, and with the SAME exit 7 as the empty service.
+# the pod is reachable and actively refuses on a closed port, so curl
+# gets a reset rather than a timeout. the exit code alone cannot tell
+# these two faults apart, which is why you check the endpoint list.
+
+$ kubectl -n triage exec triage-client -- sh -c 'curl -s -m 5 http://shop-wrongport/ ; echo exit=$?'
+exit=7
+# targetPort 9999, container listens on 8080
+
+$ kubectl -n triage get svc shop-wrongport -o jsonpath='targetPort={.spec.ports[0].targetPort}{"\n"}'
+targetPort=9999
+
+$ kubectl -n triage get deploy shop -o jsonpath='containerPort={.spec.template.spec.containers[0].ports[0].containerPort}{"\n"}'
+containerPort=8080
+
+===== 12. Final state =====
+
+$ kubectl -n triage get pods
+NAME                    READY   STATUS    RESTARTS   AGE
+broken-image            1/1     Running   0          55s
+broken-pending          1/1     Running   0          43s
+shop-6f575dbd46-bdmxd   1/1     Running   0          94s
+shop-6f575dbd46-xpbpj   1/1     Running   0          94s
+triage-client           1/1     Running   0          94s
+
+$ kubectl -n triage get svc
+NAME             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+shop             ClusterIP   10.96.181.38    <none>        80/TCP    94s
+shop-broken      ClusterIP   10.96.177.92    <none>        80/TCP    16s
+shop-wrongport   ClusterIP   10.96.114.170   <none>        80/TCP    5s
+
+===== Done. Output saved to output.log =====

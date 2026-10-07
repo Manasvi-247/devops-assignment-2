@@ -1,0 +1,12 @@
+# Requests more memory than any node has.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: broken-pending
+  namespace: triage
+spec:
+  containers:
+    - name: app
+      image: nginx:1.29-alpine
+      resources:
+        requests: {cpu: "100m", memory: "256Gi"}
