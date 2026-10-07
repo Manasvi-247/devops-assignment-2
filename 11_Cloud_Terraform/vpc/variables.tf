@@ -39,3 +39,15 @@ variable "localstack_endpoint" {
   type        = string
   default     = "http://localhost:4566"
 }
+
+variable "instance_type" {
+  description = "Size of the web instance"
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "assets_bucket" {
+  description = "Globally unique bucket name for static assets"
+  type        = string
+  default     = "devops-course-24bcs10406-assets"
+}

@@ -5,8 +5,8 @@
 **Terraform:** v1.16.4, AWS provider v5.100.0
 
 A VPC with two public subnets across two availability zones, an internet
-gateway, a route table and a security group, built with Terraform and then
-checked independently with the AWS CLI. Every output block is quoted from
+gateway, a route table, a security group, an EC2 instance and an S3 bucket,
+built with Terraform and then checked independently with the AWS CLI. Every output block is quoted from
 [`output.log`](output.log), written by [`verify.sh`](verify.sh).
 
 ---
@@ -226,15 +226,65 @@ SSH, which is the single most common real world misconfiguration.
 
 ---
 
-## 7. apply, and checking it independently
+## 7. Compute and storage in the network
+
+The network exists to put something in it. The instance goes in the first
+public subnet, carrying the security group from section 6.
+
+```hcl
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+}
+
+resource "aws_instance" "web" {
+  ami                         = data.aws_ami.amazon_linux.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public[0].id
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  associate_public_ip_address = true
+}
+```
+
+The AMI is looked up rather than written down, for the same reason the
+availability zones are: **AMI ids are per region**, so a hardcoded one makes
+the configuration unusable anywhere else.
+
+`associate_public_ip_address` is not what makes this reachable. The subnet's
+route to the internet gateway does that. Without the route, a public IP is an
+address nothing can get to.
+
+The bucket beside it blocks public access explicitly:
+
+```hcl
+resource "aws_s3_bucket_public_access_block" "assets" {
+  bucket                  = aws_s3_bucket.assets.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+```
+
+---
+
+## 8. apply, and checking it independently
 
 ```text
 $ terraform state list
+data.aws_ami.amazon_linux
 data.aws_availability_zones.available
+aws_instance.web
 aws_internet_gateway.main
 aws_route_table.public
 aws_route_table_association.public[0]
 aws_route_table_association.public[1]
+aws_s3_bucket.assets
+aws_s3_bucket_public_access_block.assets
 aws_security_group.web
 aws_subnet.public[0]
 aws_subnet.public[1]
@@ -280,15 +330,35 @@ $ aws ec2 describe-internet-gateways
 +--------------+----------------+-------------+
 ```
 
+```text
+$ aws ec2 describe-instances --filters Name=tag:Name,Values=devops-course-web
++----------------------+------------+----------+------------------+------------+
+|          ID          | PrivateIP  |  State   |     Subnet       |   Type     |
++----------------------+------------+----------+------------------+------------+
+|  i-5689413d1f19a0c07 |  10.20.1.4 |  running |  subnet-87265edf |  t3.micro  |
++----------------------+------------+----------+------------------+------------+
+
+$ aws s3 ls
+2026-10-08 01:02:37 devops-course-24bcs10406-assets
+
+$ aws s3api get-public-access-block --bucket devops-course-24bcs10406-assets
+||  BlockPublicAcls        |  True ||
+||  BlockPublicPolicy      |  True ||
+||  IgnorePublicAcls       |  True ||
+||  RestrictPublicBuckets  |  True ||
+```
+
 Two subnets in two different AZs, `MapPublicIpOnLaunch` true, and the gateway
-attached to this VPC specifically. `DnsHostnames` shows `None` because
+attached to this VPC specifically. The instance landed in the first subnet with
+a `10.20.1.x` address from that subnet's range, and the bucket has all four
+public access blocks on. `DnsHostnames` shows `None` because
 LocalStack does not report that attribute through `describe-vpcs`, though it is
 set in the configuration. That is a gap in the emulator rather than in the
 Terraform, and worth flagging rather than glossing over.
 
 ---
 
-## 8. Idempotency and destroy
+## 9. Idempotency and destroy
 
 ```text
 $ terraform plan | tail -4
@@ -310,7 +380,7 @@ has anything in it.
 
 ---
 
-## 9. What I took away
+## 10. What I took away
 
 - An SCP cannot be overridden from inside the account. More IAM permissions
   would not have helped, and recognising that saved a lot of wasted effort.
@@ -325,25 +395,31 @@ has anything in it.
 - Security groups are stateful and allow only, so return traffic needs no rule
   and nothing can be explicitly denied.
 - `terraform output` and an independent API query are different claims.
-  Checking both is the habit worth keeping.
+  Checking both is the habit worth keeping, and it caught a stale log here: an
+  abandoned run left a terminated instance and a state lock behind, and the
+  next run's output described infrastructure that had not been built.
+- The provider needs `s3_use_path_style` against LocalStack. Without it every
+  S3 call returned 500 and Terraform retried until it was killed, while EC2 in
+  the same configuration worked fine.
 
 ---
 
-## 10. Screenshots
+## 11. Screenshots
 
 | What it shows | Capture |
 |---|---|
-| `apply` creating the VPC and its 9 resources | [s19-01-apply.png](screenshots/s19-01-apply.png) |
+| `apply` creating all 11 resources | [s19-01-apply.png](screenshots/s19-01-apply.png) |
 | State list and outputs | [s19-02-state-outputs.png](screenshots/s19-02-state-outputs.png) |
 | VPC, subnets and gateway read back from the API | [s19-03-verify-vpc-subnets.png](screenshots/s19-03-verify-vpc-subnets.png) |
 | The `0.0.0.0/0` route and the security group rule | [s19-04-routes-and-sg.png](screenshots/s19-04-routes-and-sg.png) |
-| A second plan finding nothing, then destroy | [s19-05-idempotent-destroy.png](screenshots/s19-05-idempotent-destroy.png) |
+| The instance in its subnet, and the bucket with public access blocked | [s19-05-ec2-and-s3.png](screenshots/s19-05-ec2-and-s3.png) |
+| A second plan finding nothing, then destroy | [s19-06-idempotent-destroy.png](screenshots/s19-06-idempotent-destroy.png) |
 
 ![The route that makes a subnet public](screenshots/s19-04-routes-and-sg.png)
 
 ---
 
-## 11. Reproducing this
+## 12. Reproducing this
 
 ```bash
 docker run -d --name localstack-tf -p 4566:4566 -e SERVICES=s3,ec2 localstack/localstack:3.8
@@ -358,7 +434,7 @@ cd vpc
 terraform apply -var use_localstack=false
 ```
 
-## 12. Cleanup
+## 13. Cleanup
 
 ```bash
 cd vpc && terraform destroy -auto-approve

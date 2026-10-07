@@ -61,6 +61,11 @@ run "$AWSL ec2 describe-internet-gateways --query 'InternetGateways[].{ID:Intern
 note "the route that makes those subnets public:"
 run "$AWSL ec2 describe-route-tables --query 'RouteTables[?Tags[?Value==\`devops-course-public-rt\`]].Routes[]' --output table"
 run "$AWSL ec2 describe-security-groups --filters Name=group-name,Values=devops-course-web --query 'SecurityGroups[].IpPermissions[].{From:FromPort,To:ToPort,Proto:IpProtocol,Cidr:IpRanges[0].CidrIp}' --output table"
+note "the instance, placed in the first public subnet and carrying that group:"
+run "$AWSL ec2 describe-instances --filters Name=tag:Name,Values=devops-course-web --query 'Reservations[].Instances[].{ID:InstanceId,Type:InstanceType,State:State.Name,Subnet:SubnetId,PrivateIP:PrivateIpAddress}' --output table"
+note "and the bucket, with public access blocked:"
+run "$AWSL s3 ls"
+run "$AWSL s3api get-public-access-block --bucket devops-course-24bcs10406-assets --output table"
 
 echo "" | tee -a "$LOG"
 echo "===== 8. Idempotency =====" | tee -a "$LOG"

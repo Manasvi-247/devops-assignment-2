@@ -7,15 +7,14 @@ import json,sys
 d=json.load(sys.stdin)['services']
 for k in ('ec2','s3'):
     print(f'{k}: {d.get(k)}')"
-ec2: running
-s3: running
+ec2: available
+s3: available
 
 ===== 2. The configuration =====
 
 $ ls
 main.tf
 outputs.tf
-terraform.tfstate
 variables.tf
 versions.tf
 
@@ -106,6 +105,48 @@ resource "aws_security_group" "web" {
   }
 }
 
+# The session architecture puts a server in the public subnet and a bucket
+# beside it. The AMI is looked up rather than hardcoded, because AMI ids are
+# per region.
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+}
+
+resource "aws_instance" "web" {
+  ami                         = data.aws_ami.amazon_linux.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public[0].id
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  associate_public_ip_address = true
+
+  tags = {
+    Name = "${var.project}-web"
+  }
+}
+
+resource "aws_s3_bucket" "assets" {
+  bucket = var.assets_bucket
+
+  tags = {
+    Name = var.assets_bucket
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 ===== 3. init, validate, fmt =====
 
 $ terraform init -no-color | tail -6
@@ -126,69 +167,76 @@ formatting is already canonical
 ===== 4. plan =====
 
 $ terraform plan -no-color | tail -12
-aws_internet_gateway.main: Refreshing state... [id=igw-ac370ba0]
-aws_subnet.public[0]: Refreshing state... [id=subnet-c3fc17d0]
-aws_subnet.public[1]: Refreshing state... [id=subnet-beacc67a]
-aws_security_group.web: Refreshing state... [id=sg-c553cba6b0754c5a2]
-aws_route_table.public: Refreshing state... [id=rtb-f2438c61]
-aws_route_table_association.public[0]: Refreshing state... [id=rtbassoc-4bc2b6de]
-aws_route_table_association.public[1]: Refreshing state... [id=rtbassoc-26ce053a]
+  + instance_private_ip = (known after apply)
+  + public_subnet_ids   = [
+      + (known after apply),
+      + (known after apply),
+    ]
+  + security_group_id   = (known after apply)
+  + vpc_id              = (known after apply)
 
-No changes. Your infrastructure matches the configuration.
+─────────────────────────────────────────────────────────────────────────────
 
-Terraform has compared your real infrastructure against your configuration
-and found no differences, so no changes are needed.
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
 
 ===== 5. apply =====
 
 $ terraform apply -auto-approve -no-color | tail -22
-aws_route_table_association.public[0]: Refreshing state... [id=rtbassoc-4bc2b6de]
-aws_route_table_association.public[1]: Refreshing state... [id=rtbassoc-26ce053a]
+aws_route_table_association.public[1]: Creation complete after 0s [id=rtbassoc-0b5d877d]
+aws_route_table_association.public[0]: Creation complete after 0s [id=rtbassoc-f01a52bc]
+aws_instance.web: Still creating... [00m10s elapsed]
+aws_instance.web: Creation complete after 10s [id=i-5689413d1f19a0c07]
 
-No changes. Your infrastructure matches the configuration.
-
-Terraform has compared your real infrastructure against your configuration
-and found no differences, so no changes are needed.
-
-Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+Apply complete! Resources: 11 added, 0 changed, 0 destroyed.
 
 Outputs:
 
+assets_bucket = "devops-course-24bcs10406-assets"
 availability_zones = [
   "ap-south-1a",
   "ap-south-1b",
 ]
+instance_id = "i-5689413d1f19a0c07"
+instance_private_ip = "10.20.1.4"
 public_subnet_ids = [
-  "subnet-c3fc17d0",
-  "subnet-beacc67a",
+  "subnet-87265edf",
+  "subnet-8b370ab7",
 ]
-security_group_id = "sg-c553cba6b0754c5a2"
-vpc_id = "vpc-b09be995"
+security_group_id = "sg-e12c5ed33426c6d97"
+vpc_id = "vpc-749a36da"
 
 ===== 6. What terraform tracks =====
 
 $ terraform state list
+data.aws_ami.amazon_linux
 data.aws_availability_zones.available
+aws_instance.web
 aws_internet_gateway.main
 aws_route_table.public
 aws_route_table_association.public[0]
 aws_route_table_association.public[1]
+aws_s3_bucket.assets
+aws_s3_bucket_public_access_block.assets
 aws_security_group.web
 aws_subnet.public[0]
 aws_subnet.public[1]
 aws_vpc.main
 
 $ terraform output -no-color
+assets_bucket = "devops-course-24bcs10406-assets"
 availability_zones = [
   "ap-south-1a",
   "ap-south-1b",
 ]
+instance_id = "i-5689413d1f19a0c07"
+instance_private_ip = "10.20.1.4"
 public_subnet_ids = [
-  "subnet-c3fc17d0",
-  "subnet-beacc67a",
+  "subnet-87265edf",
+  "subnet-8b370ab7",
 ]
-security_group_id = "sg-c553cba6b0754c5a2"
-vpc_id = "vpc-b09be995"
+security_group_id = "sg-e12c5ed33426c6d97"
+vpc_id = "vpc-749a36da"
 
 ===== 7. Verified independently with the aws cli =====
 # terraform could be lying. these queries go straight to the api.
@@ -199,7 +247,7 @@ $ aws --endpoint-url=http://localhost:4566 ec2 describe-vpcs --filters Name=tag:
 +--------------+----------------+----------------+------------+
 |     CIDR     | DnsHostnames   |      ID        |   State    |
 +--------------+----------------+----------------+------------+
-|  10.20.0.0/16|  None          |  vpc-b09be995  |  available |
+|  10.20.0.0/16|  None          |  vpc-749a36da  |  available |
 +--------------+----------------+----------------+------------+
 
 $ aws --endpoint-url=http://localhost:4566 ec2 describe-subnets --filters Name=tag:Tier,Values=public --query 'Subnets[].{ID:SubnetId,CIDR:CidrBlock,AZ:AvailabilityZone,AutoPublicIP:MapPublicIpOnLaunch}' --output table
@@ -208,8 +256,8 @@ $ aws --endpoint-url=http://localhost:4566 ec2 describe-subnets --filters Name=t
 +-------------+---------------+---------------+--------------------+
 |     AZ      | AutoPublicIP  |     CIDR      |        ID          |
 +-------------+---------------+---------------+--------------------+
-|  ap-south-1a|  True         |  10.20.1.0/24 |  subnet-c3fc17d0   |
-|  ap-south-1b|  True         |  10.20.2.0/24 |  subnet-beacc67a   |
+|  ap-south-1a|  True         |  10.20.1.0/24 |  subnet-87265edf   |
+|  ap-south-1b|  True         |  10.20.2.0/24 |  subnet-8b370ab7   |
 +-------------+---------------+---------------+--------------------+
 
 $ aws --endpoint-url=http://localhost:4566 ec2 describe-internet-gateways --query 'InternetGateways[].{ID:InternetGatewayId,AttachedTo:Attachments[0].VpcId,State:Attachments[0].State}' --output table
@@ -218,7 +266,7 @@ $ aws --endpoint-url=http://localhost:4566 ec2 describe-internet-gateways --quer
 +--------------+----------------+-------------+
 |  AttachedTo  |      ID        |    State    |
 +--------------+----------------+-------------+
-|  vpc-b09be995|  igw-ac370ba0  |  available  |
+|  vpc-749a36da|  igw-6c847745  |  available  |
 +--------------+----------------+-------------+
 # the route that makes those subnets public:
 
@@ -229,7 +277,7 @@ $ aws --endpoint-url=http://localhost:4566 ec2 describe-route-tables --query 'Ro
 | DestinationCidrBlock  |   GatewayId   |      Origin        |  State  |
 +-----------------------+---------------+--------------------+---------+
 |  10.20.0.0/16         |  local        |  CreateRouteTable  |  active |
-|  0.0.0.0/0            |  igw-ac370ba0 |  CreateRoute       |  active |
+|  0.0.0.0/0            |  igw-6c847745 |  CreateRoute       |  active |
 +-----------------------+---------------+--------------------+---------+
 
 $ aws --endpoint-url=http://localhost:4566 ec2 describe-security-groups --filters Name=group-name,Values=devops-course-web --query 'SecurityGroups[].IpPermissions[].{From:FromPort,To:ToPort,Proto:IpProtocol,Cidr:IpRanges[0].CidrIp}' --output table
@@ -240,24 +288,50 @@ $ aws --endpoint-url=http://localhost:4566 ec2 describe-security-groups --filter
 +------------+-------+---------+-----+
 |  0.0.0.0/0 |  80   |  tcp    |  80 |
 +------------+-------+---------+-----+
+# the instance, placed in the first public subnet and carrying that group:
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-instances --filters Name=tag:Name,Values=devops-course-web --query 'Reservations[].Instances[].{ID:InstanceId,Type:InstanceType,State:State.Name,Subnet:SubnetId,PrivateIP:PrivateIpAddress}' --output table
+--------------------------------------------------------------------------------
+|                               DescribeInstances                              |
++----------------------+------------+----------+------------------+------------+
+|          ID          | PrivateIP  |  State   |     Subnet       |   Type     |
++----------------------+------------+----------+------------------+------------+
+|  i-5689413d1f19a0c07 |  10.20.1.4 |  running |  subnet-87265edf |  t3.micro  |
++----------------------+------------+----------+------------------+------------+
+# and the bucket, with public access blocked:
+
+$ aws --endpoint-url=http://localhost:4566 s3 ls
+2026-10-08 01:02:37 devops-course-24bcs10406-assets
+
+$ aws --endpoint-url=http://localhost:4566 s3api get-public-access-block --bucket devops-course-24bcs10406-assets --output table
+-------------------------------------
+|       GetPublicAccessBlock        |
++-----------------------------------+
+|| PublicAccessBlockConfiguration  ||
+|+-------------------------+-------+|
+||  BlockPublicAcls        |  True ||
+||  BlockPublicPolicy      |  True ||
+||  IgnorePublicAcls       |  True ||
+||  RestrictPublicBuckets  |  True ||
+|+-------------------------+-------+|
 
 ===== 8. Idempotency =====
 
 $ terraform plan -no-color | tail -4
-No changes. Your infrastructure matches the configuration.
+─────────────────────────────────────────────────────────────────────────────
 
-Terraform has compared your real infrastructure against your configuration
-and found no differences, so no changes are needed.
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
 
 ===== 9. destroy =====
 
 $ terraform destroy -auto-approve -no-color | tail -6
-aws_internet_gateway.main: Destroying... [id=igw-ac370ba0]
-aws_internet_gateway.main: Destruction complete after 0s
-aws_vpc.main: Destroying... [id=vpc-b09be995]
+aws_subnet.public[0]: Destruction complete after 0s
+aws_security_group.web: Destruction complete after 0s
+aws_vpc.main: Destroying... [id=vpc-749a36da]
 aws_vpc.main: Destruction complete after 0s
 
-Destroy complete! Resources: 8 destroyed.
+Destroy complete! Resources: 11 destroyed.
 
 $ aws --endpoint-url=http://localhost:4566 ec2 describe-vpcs --filters Name=tag:Name,Values=devops-course-vpc --query 'length(Vpcs)' --output text
 0

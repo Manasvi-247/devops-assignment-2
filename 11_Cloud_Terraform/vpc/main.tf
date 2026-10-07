@@ -83,3 +83,45 @@ resource "aws_security_group" "web" {
     Name = "${var.project}-web-sg"
   }
 }
+
+# The session architecture puts a server in the public subnet and a bucket
+# beside it. The AMI is looked up rather than hardcoded, because AMI ids are
+# per region.
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+}
+
+resource "aws_instance" "web" {
+  ami                         = data.aws_ami.amazon_linux.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public[0].id
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  associate_public_ip_address = true
+
+  tags = {
+    Name = "${var.project}-web"
+  }
+}
+
+resource "aws_s3_bucket" "assets" {
+  bucket = var.assets_bucket
+
+  tags = {
+    Name = var.assets_bucket
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "assets" {
+  bucket = aws_s3_bucket.assets.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
