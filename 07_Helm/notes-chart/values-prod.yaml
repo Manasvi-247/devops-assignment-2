@@ -1,0 +1,14 @@
+# Overlay for a production style install. Only the differences.
+replicaCount: 4
+
+env:
+  APP_ENV: production
+  BANNER: "notes app, production overlay"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

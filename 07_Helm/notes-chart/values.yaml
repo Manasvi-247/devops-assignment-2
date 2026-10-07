@@ -1,0 +1,23 @@
+replicaCount: 2
+
+image:
+  repository: nginxdemos/nginx-hello
+  tag: plain-text
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+env:
+  APP_ENV: development
+  BANNER: "notes app, default values"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi

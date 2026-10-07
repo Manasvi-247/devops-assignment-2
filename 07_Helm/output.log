@@ -1,0 +1,307 @@
+
+$ helm version --short
+v4.3.0+gbec5b06
+
+$ kubectl create namespace helm-lab --dry-run=client -o yaml | kubectl apply -f -
+namespace/helm-lab unchanged
+
+===== 1. Chart structure =====
+
+$ find notes-chart -type f | sort
+notes-chart/.helmignore
+notes-chart/Chart.yaml
+notes-chart/templates/NOTES.txt
+notes-chart/templates/_helpers.tpl
+notes-chart/templates/deployment.yaml
+notes-chart/templates/service.yaml
+notes-chart/values-prod.yaml
+notes-chart/values.yaml
+
+$ cat notes-chart/Chart.yaml
+apiVersion: v2
+name: notes-chart
+description: A notes app packaged as a Helm chart for the session 15 exercises
+type: application
+version: 0.1.0
+appVersion: "1.0"
+# lint before anything is installed
+
+$ helm lint notes-chart
+==> Linting notes-chart
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+
+===== 2. Templating: values in, manifests out =====
+# render locally without touching the cluster
+
+$ helm template notes notes-chart | head -40
+---
+# Source: notes-chart/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: notes-notes-chart
+  labels:
+    app.kubernetes.io/name: notes-chart
+    app.kubernetes.io/instance: notes
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: notes-chart-0.1.0
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: notes-chart
+    app.kubernetes.io/instance: notes
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+
+---
+# Source: notes-chart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes-notes-chart
+  labels:
+    app.kubernetes.io/name: notes-chart
+    app.kubernetes.io/instance: notes
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: notes-chart-0.1.0
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notes-chart
+      app.kubernetes.io/instance: notes
+# the same template with the production overlay, showing only what changed
+
+$ diff <(helm template notes notes-chart) <(helm template notes notes-chart -f notes-chart/values-prod.yaml) | head -30
+36c36
+<   replicas: 2
+---
+>   replicas: 4
+56c56
+<               value: "development"
+---
+>               value: "production"
+58c58
+<               value: "notes app, default values"
+---
+>               value: "notes app, production overlay"
+66,67c66,67
+<               cpu: 100m
+<               memory: 64Mi
+---
+>               cpu: 200m
+>               memory: 128Mi
+69,70c69,70
+<               cpu: 25m
+<               memory: 32Mi
+---
+>               cpu: 50m
+>               memory: 64Mi
+
+===== 3. Install =====
+
+$ helm install notes notes-chart -n helm-lab --wait --timeout 5m
+NAME: notes
+LAST DEPLOYED: Wed Oct  7 20:43:14 2026
+NAMESPACE: helm-lab
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+NOTES:
+notes-chart 0.1.0 installed as release "notes".
+
+Environment: development
+Replicas:    2
+
+Reach it from inside the cluster:
+
+  kubectl -n helm-lab run tmp --rm -it --image=curlimages/curl:8.7.1 --restart=Never -- \
+    curl -s http://notes-notes-chart:80
+
+$ helm list -n helm-lab
+NAME 	NAMESPACE	REVISION	UPDATED                             	STATUS  	CHART            	APP VERSION
+notes	helm-lab 	1       	2026-10-07 20:43:14.627948 +0530 IST	deployed	notes-chart-0.1.0	1.0        
+
+$ kubectl -n helm-lab get deploy,svc,pods
+NAME                                READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/notes-notes-chart   2/2     2            2           2s
+
+NAME                        TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+service/notes-notes-chart   ClusterIP   10.96.12.102   <none>        80/TCP    2s
+
+NAME                                     READY   STATUS    RESTARTS   AGE
+pod/notes-notes-chart-74df7d7674-sccjk   1/1     Running   0          2s
+pod/notes-notes-chart-74df7d7674-zbcxn   1/1     Running   0          2s
+# the release is stored in the cluster as a secret, not in a local file:
+
+$ kubectl -n helm-lab get secret -l owner=helm
+NAME                          TYPE                 DATA   AGE
+sh.helm.release.v1.notes.v1   helm.sh/release.v1   1      2s
+
+===== 4. Values: what the release was rendered with =====
+
+$ helm get values notes -n helm-lab
+USER-SUPPLIED VALUES:
+null
+
+$ helm get values notes -n helm-lab --all | head -25
+COMPUTED VALUES:
+env:
+  APP_ENV: development
+  BANNER: notes app, default values
+image:
+  pullPolicy: IfNotPresent
+  repository: nginxdemos/nginx-hello
+  tag: plain-text
+replicaCount: 2
+resources:
+  limits:
+    cpu: 100m
+    memory: 64Mi
+  requests:
+    cpu: 25m
+    memory: 32Mi
+service:
+  port: 80
+  targetPort: 8080
+  type: ClusterIP
+
+===== 5. Upgrade: scale up and switch to the production overlay =====
+
+$ helm upgrade notes notes-chart -n helm-lab -f notes-chart/values-prod.yaml --wait --timeout 5m
+Release "notes" has been upgraded. Happy Helming!
+NAME: notes
+LAST DEPLOYED: Wed Oct  7 20:43:16 2026
+NAMESPACE: helm-lab
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: Upgrade complete
+TEST SUITE: None
+NOTES:
+notes-chart 0.1.0 installed as release "notes".
+
+Environment: production
+Replicas:    4
+
+Reach it from inside the cluster:
+
+  kubectl -n helm-lab run tmp --rm -it --image=curlimages/curl:8.7.1 --restart=Never -- \
+    curl -s http://notes-notes-chart:80
+
+$ helm list -n helm-lab
+NAME 	NAMESPACE	REVISION	UPDATED                             	STATUS  	CHART            	APP VERSION
+notes	helm-lab 	2       	2026-10-07 20:43:16.405444 +0530 IST	deployed	notes-chart-0.1.0	1.0        
+
+$ kubectl -n helm-lab get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas
+NAME                REPLICAS
+notes-notes-chart   4
+
+$ kubectl -n helm-lab get pods --no-headers
+notes-notes-chart-545958b9d6-6wn2f   1/1   Running       0     7s
+notes-notes-chart-545958b9d6-bd7kl   1/1   Running       0     1s
+notes-notes-chart-545958b9d6-cmrfc   1/1   Running       0     1s
+notes-notes-chart-545958b9d6-xqwqm   1/1   Running       0     7s
+notes-notes-chart-74df7d7674-sccjk   1/1   Terminating   0     9s
+# the env var changed too, not just the replica count:
+
+$ kubectl -n helm-lab rollout status deployment/notes-notes-chart --timeout=180s
+deployment "notes-notes-chart" successfully rolled out
+
+$ kubectl -n helm-lab exec notes-notes-chart-545958b9d6-6wn2f -- sh -c 'echo APP_ENV=$APP_ENV; echo BANNER=$BANNER'
+APP_ENV=production
+BANNER=notes app, production overlay
+
+===== 6. Upgrade again, with a single --set override =====
+
+$ helm upgrade notes notes-chart -n helm-lab -f notes-chart/values-prod.yaml --set replicaCount=3 --wait --timeout 5m
+Release "notes" has been upgraded. Happy Helming!
+NAME: notes
+LAST DEPLOYED: Wed Oct  7 20:43:23 2026
+NAMESPACE: helm-lab
+STATUS: deployed
+REVISION: 3
+DESCRIPTION: Upgrade complete
+TEST SUITE: None
+NOTES:
+notes-chart 0.1.0 installed as release "notes".
+
+Environment: production
+Replicas:    3
+
+Reach it from inside the cluster:
+
+  kubectl -n helm-lab run tmp --rm -it --image=curlimages/curl:8.7.1 --restart=Never -- \
+    curl -s http://notes-notes-chart:80
+
+$ kubectl -n helm-lab get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas
+NAME                REPLICAS
+notes-notes-chart   3
+
+===== 7. History and rollback =====
+
+$ helm history notes -n helm-lab
+REVISION	UPDATED                 	STATUS    	CHART            	APP VERSION	DESCRIPTION     
+1       	Wed Oct  7 20:43:14 2026	superseded	notes-chart-0.1.0	1.0        	Install complete
+2       	Wed Oct  7 20:43:16 2026	superseded	notes-chart-0.1.0	1.0        	Upgrade complete
+3       	Wed Oct  7 20:43:23 2026	deployed  	notes-chart-0.1.0	1.0        	Upgrade complete
+# roll back to revision 1, the original development values
+
+$ helm rollback notes 1 -n helm-lab --wait --timeout 5m
+Rollback was a success! Happy Helming!
+
+$ helm history notes -n helm-lab
+REVISION	UPDATED                 	STATUS    	CHART            	APP VERSION	DESCRIPTION     
+1       	Wed Oct  7 20:43:14 2026	superseded	notes-chart-0.1.0	1.0        	Install complete
+2       	Wed Oct  7 20:43:16 2026	superseded	notes-chart-0.1.0	1.0        	Upgrade complete
+3       	Wed Oct  7 20:43:23 2026	superseded	notes-chart-0.1.0	1.0        	Upgrade complete
+4       	Wed Oct  7 20:43:23 2026	deployed  	notes-chart-0.1.0	1.0        	Rollback to 1   
+
+$ kubectl -n helm-lab get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas
+NAME                REPLICAS
+notes-notes-chart   2
+
+$ kubectl -n helm-lab rollout status deployment/notes-notes-chart --timeout=180s
+deployment "notes-notes-chart" successfully rolled out
+
+$ kubectl -n helm-lab exec notes-notes-chart-74df7d7674-hpxmf -- sh -c 'echo APP_ENV=$APP_ENV; echo BANNER=$BANNER'
+APP_ENV=development
+BANNER=notes app, default values
+# back to the development values, so the rollback really changed the pods
+# rollback is recorded as a NEW revision, it does not erase history
+
+===== 8. Package and inspect =====
+
+$ helm package notes-chart -d /tmp
+Successfully packaged chart and saved it to: /tmp/notes-chart-0.1.0.tgz
+
+$ helm show chart notes-chart
+apiVersion: v2
+appVersion: "1.0"
+description: A notes app packaged as a Helm chart for the session 15 exercises
+name: notes-chart
+type: application
+version: 0.1.0
+
+
+===== 9. Uninstall =====
+
+$ helm uninstall notes -n helm-lab --wait
+release "notes" uninstalled
+
+$ helm list -n helm-lab
+NAME	NAMESPACE	REVISION	UPDATED	STATUS	CHART	APP VERSION
+
+$ kubectl -n helm-lab get all
+NAME                                     READY   STATUS        RESTARTS   AGE
+pod/notes-notes-chart-545958b9d6-6wn2f   0/1     Completed     0          10s
+pod/notes-notes-chart-74df7d7674-hpxmf   1/1     Terminating   0          3s
+pod/notes-notes-chart-74df7d7674-qvv86   1/1     Terminating   0          1s
+
+===== Done. Output saved to output.log =====
