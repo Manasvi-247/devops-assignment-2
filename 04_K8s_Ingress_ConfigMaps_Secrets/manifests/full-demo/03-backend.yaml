@@ -1,0 +1,68 @@
+# nginx returning the request URI it received, so the ingress rewrite is
+# visible in the response. Consumes the ConfigMap in BULK with envFrom and the
+# Secret by individual key with secretKeyRef.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yatri-backend-nginx
+  namespace: app-config
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location / {
+        default_type text/plain;
+        return 200 "YATRI BACKEND API | uri=$request_uri\n";
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yatri-backend
+  namespace: app-config
+  labels: {app: yatri-app, tier: backend}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: yatri-app, tier: backend}
+  template:
+    metadata:
+      labels: {app: yatri-app, tier: backend}
+    spec:
+      containers:
+        - name: backend
+          image: nginx:1.29-alpine
+          envFrom:
+            - configMapRef:
+                name: yatri-app-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: {name: yatri-db-secret, key: POSTGRES_USER}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: yatri-db-secret, key: POSTGRES_PASSWORD}
+          ports: [{name: http, containerPort: 8080}]
+          volumeMounts:
+            - {name: conf, mountPath: /etc/nginx/conf.d}
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "100m", memory: "64Mi"}
+      volumes:
+        - name: conf
+          configMap: {name: yatri-backend-nginx}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yatri-backend
+  namespace: app-config
+  labels: {app: yatri-app}
+spec:
+  selector: {app: yatri-app, tier: backend}
+  ports: [{name: http, port: 80, targetPort: 8080}]

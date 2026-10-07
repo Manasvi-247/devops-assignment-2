@@ -16,12 +16,21 @@ that file.
 
 | # | Topic | Session | README |
 |---|---|---|---|
-| 1 | Kubernetes Fundamentals | Session 9 | [01_K8s_Fundamentals/README.md](01_K8s_Fundamentals/README.md) |
-| 2 | Kubernetes Pods, ReplicaSets and Deployments | Session 10 | [02_K8s_Pods_ReplicaSets_Deployments/README.md](02_K8s_Pods_ReplicaSets_Deployments/README.md) |
-| 3 | Kubernetes Networking and Services | Session 11 | [03_K8s_Networking_Services/README.md](03_K8s_Networking_Services/README.md) |
-| 4 | Kubernetes Ingress, ConfigMaps and Secrets | Session 12 | [04_K8s_Ingress_ConfigMaps_Secrets/README.md](04_K8s_Ingress_ConfigMaps_Secrets/README.md) |
+| 1 | Kubernetes Fundamentals | 9 | [01_K8s_Fundamentals](01_K8s_Fundamentals/README.md) |
+| 2 | Kubernetes Pods, ReplicaSets and Deployments | 10 | [02_K8s_Pods_ReplicaSets_Deployments](02_K8s_Pods_ReplicaSets_Deployments/README.md) |
+| 3 | Kubernetes Networking and Services | 11 | [03_K8s_Networking_Services](03_K8s_Networking_Services/README.md) |
+| 4 | Kubernetes Ingress, ConfigMaps and Secrets | 12 | [04_K8s_Ingress_ConfigMaps_Secrets](04_K8s_Ingress_ConfigMaps_Secrets/README.md) |
+| 5 | Kubernetes Storage, HPA and Probes | 13 | [05_K8s_Storage_HPA_Probes](05_K8s_Storage_HPA_Probes/README.md) |
+| 6 | Kubernetes Troubleshooting | 14 | [06_K8s_Troubleshooting](06_K8s_Troubleshooting/README.md) |
+| 7 | Helm | 15 | [07_Helm](07_Helm/README.md) |
+| 8 | CI/CD and GitHub Actions | 16 | [08_CICD_GitHub_Actions](08_CICD_GitHub_Actions/README.md) |
+| 9 | DevSecOps | 17 | [09_DevSecOps](09_DevSecOps/README.md) |
+| 10 | Terraform and Infrastructure as Code | 18 | [10_Terraform_IaC](10_Terraform_IaC/README.md) |
+| 11 | Cloud and Terraform in Action | 19 | [11_Cloud_Terraform](11_Cloud_Terraform/README.md) |
+| 12 | Monitoring, Observability and GitOps | 20 | [12_Monitoring_Observability_GitOps](12_Monitoring_Observability_GitOps/README.md) |
+| 13 | Final Project: TaskBoard | 21 | [13_Final_Project_TaskBoard](13_Final_Project_TaskBoard/README.md) |
 
-Sessions 1 to 7 (Linux, shell scripting, networking, git, Docker) are in the
+Sessions 1 to 8 (Linux, shell scripting, networking, git, Docker) are in the
 first assignment repo: <https://github.com/Manasvi-247/devops>
 
 ## Environment

@@ -15,3 +15,15 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "use_localstack" {
+  description = "Target a local LocalStack container instead of real AWS"
+  type        = bool
+  default     = true
+}
+
+variable "localstack_endpoint" {
+  description = "Where LocalStack is listening"
+  type        = string
+  default     = "http://localhost:4566"
+}

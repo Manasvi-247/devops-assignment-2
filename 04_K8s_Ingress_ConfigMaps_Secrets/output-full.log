@@ -1,0 +1,311 @@
+===== 1. The base64 trailing newline bug =====
+# this is a shell level gotcha, no cluster involved
+
+$ echo 'secretpassword' | xxd | tail -2
+00000000: 7365 6372 6574 7061 7373 776f 7264 0a    secretpassword.
+
+$ echo -n 'secretpassword' | xxd | tail -2
+00000000: 7365 6372 6574 7061 7373 776f 7264       secretpassword
+# the first ends 0a, which is a newline. the encodings differ:
+
+$ echo 'secretpassword' | base64
+c2VjcmV0cGFzc3dvcmQK
+
+$ echo -n 'secretpassword' | base64
+c2VjcmV0cGFzc3dvcmQ=
+# decoding both back, piped to xxd so the difference is visible:
+
+$ echo 'c2VjcmV0cGFzc3dvcmRL' >/dev/null; echo 'secretpassword' | base64 | base64 -d | xxd | tail -1
+00000000: 7365 6372 6574 7061 7373 776f 7264 0a    secretpassword.
+
+$ echo -n 'secretpassword' | base64 | base64 -d | xxd | tail -1
+00000000: 7365 6372 6574 7061 7373 776f 7264       secretpassword
+
+===== 2. Full stack via run-demo.sh =====
+
+$ bash manifests/full-demo/run-demo.sh
+==> namespace
+==> config and secret
+configmap/yatri-app-config created
+secret/yatri-db-secret created
+==> workloads
+pod/probe created
+configmap/yatri-backend-nginx created
+deployment.apps/yatri-backend created
+service/yatri-backend created
+configmap/yatri-frontend-nginx created
+deployment.apps/yatri-frontend created
+service/yatri-frontend created
+Waiting for deployment "yatri-backend" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "yatri-backend" rollout to finish: 1 of 2 updated replicas are available...
+deployment "yatri-backend" successfully rolled out
+deployment "yatri-frontend" successfully rolled out
+pod/probe condition met
+==> tls certificate
+secret/campus-tls-cert created
+==> ingress
+ingress.networking.k8s.io/yatri-ingress created
+ingress.networking.k8s.io/campus-ingress-tls created
+==> done
+NAME                             READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/yatri-backend    2/2     2            2           5s
+deployment.apps/yatri-frontend   2/2     2            2           5s
+
+NAME                     TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+service/yatri-backend    ClusterIP   10.96.99.77     <none>        80/TCP    5s
+service/yatri-frontend   ClusterIP   10.96.227.225   <none>        80/TCP    5s
+NAME                 CLASS   HOSTS                                  ADDRESS     PORTS     AGE
+broken               nginx   broken.local                           localhost   80        163m
+campus-ingress-tls   nginx   portal.campus.local,api.campus.local               80, 443   0s
+site                 nginx   shop.local,admin.local                 localhost   80        163m
+yatri-ingress        nginx   yatri.local                                        80        0s
+
+===== 3. Bulk envFrom plus granular secretKeyRef =====
+# envFrom pulled in all five configmap keys at once, the secret two by name
+
+$ kubectl -n app-config exec deploy/yatri-backend -- env | grep -E 'ENVIRONMENT|LOG_LEVEL|PORT|DEFAULT_CURRENCY|MAX_BOOKING_DAYS|POSTGRES' | sort
+ADMIN_PORT=tcp://10.96.211.85:80
+ADMIN_PORT_80_TCP=tcp://10.96.211.85:80
+ADMIN_PORT_80_TCP_ADDR=10.96.211.85
+ADMIN_PORT_80_TCP_PORT=80
+ADMIN_PORT_80_TCP_PROTO=tcp
+ADMIN_SERVICE_PORT=80
+ADMIN_SERVICE_PORT_HTTP=80
+DEFAULT_CURRENCY=INR
+ENVIRONMENT=production
+KUBERNETES_PORT=tcp://10.96.0.1:443
+KUBERNETES_PORT_443_TCP=tcp://10.96.0.1:443
+KUBERNETES_PORT_443_TCP_ADDR=10.96.0.1
+KUBERNETES_PORT_443_TCP_PORT=443
+KUBERNETES_PORT_443_TCP_PROTO=tcp
+KUBERNETES_SERVICE_PORT=443
+KUBERNETES_SERVICE_PORT_HTTPS=443
+LOG_LEVEL=INFO
+MAX_BOOKING_DAYS=90
+PORT=8080
+POSTGRES_PASSWORD=secretpassword
+POSTGRES_USER=yatri_admin
+SHOP_PORT=tcp://10.96.197.126:80
+SHOP_PORT_80_TCP=tcp://10.96.197.126:80
+SHOP_PORT_80_TCP_ADDR=10.96.197.126
+SHOP_PORT_80_TCP_PORT=80
+SHOP_PORT_80_TCP_PROTO=tcp
+SHOP_SERVICE_PORT=80
+SHOP_SERVICE_PORT_HTTP=80
+YATRI_BACKEND_PORT=tcp://10.96.99.77:80
+YATRI_BACKEND_PORT_80_TCP=tcp://10.96.99.77:80
+YATRI_BACKEND_PORT_80_TCP_ADDR=10.96.99.77
+YATRI_BACKEND_PORT_80_TCP_PORT=80
+YATRI_BACKEND_PORT_80_TCP_PROTO=tcp
+YATRI_BACKEND_SERVICE_PORT=80
+YATRI_BACKEND_SERVICE_PORT_HTTP=80
+YATRI_FRONTEND_PORT=tcp://10.96.227.225:80
+YATRI_FRONTEND_PORT_80_TCP=tcp://10.96.227.225:80
+YATRI_FRONTEND_PORT_80_TCP_ADDR=10.96.227.225
+YATRI_FRONTEND_PORT_80_TCP_PORT=80
+YATRI_FRONTEND_PORT_80_TCP_PROTO=tcp
+YATRI_FRONTEND_SERVICE_PORT=80
+YATRI_FRONTEND_SERVICE_PORT_HTTP=80
+
+===== 4. ConfigMap update needs a rollout restart =====
+
+$ kubectl -n app-config patch configmap yatri-app-config --type merge -p '{"data":{"ENVIRONMENT":"staging"}}'
+configmap/yatri-app-config patched
+
+$ kubectl -n app-config get configmap yatri-app-config -o jsonpath='configmap now says: {.data.ENVIRONMENT}{"\n"}'
+configmap now says: staging
+# the running pod still has the OLD value:
+
+$ kubectl -n app-config exec deploy/yatri-backend -- env | grep ENVIRONMENT
+ENVIRONMENT=production
+
+$ kubectl -n app-config rollout restart deployment/yatri-backend
+deployment.apps/yatri-backend restarted
+
+$ kubectl -n app-config rollout status deployment/yatri-backend --timeout=180s
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "yatri-backend" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "yatri-backend" rollout to finish: 1 old replicas are pending termination...
+deployment "yatri-backend" successfully rolled out
+# after the restart the new pods pick it up:
+
+$ kubectl -n app-config exec deploy/yatri-backend -- env | grep ENVIRONMENT
+ENVIRONMENT=staging
+# putting it back for the rest of the run
+
+$ kubectl -n app-config patch configmap yatri-app-config --type merge -p '{"data":{"ENVIRONMENT":"production"}}'
+configmap/yatri-app-config patched
+
+$ kubectl -n app-config rollout restart deployment/yatri-backend
+deployment.apps/yatri-backend restarted
+
+$ kubectl -n app-config rollout status deployment/yatri-backend --timeout=180s
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "yatri-backend" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "yatri-backend" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "yatri-backend" rollout to finish: 1 old replicas are pending termination...
+deployment "yatri-backend" successfully rolled out
+
+===== 5. Path based routing with rewrite =====
+# ingress controller ClusterIP: 10.96.191.177
+
+$ kubectl -n app-config get ingress yatri-ingress
+NAME            CLASS   HOSTS         ADDRESS   PORTS   AGE
+yatri-ingress   nginx   yatri.local             80      11s
+
+$ kubectl -n app-config describe ingress yatri-ingress | sed -n '/Rules:/,/Annotations/p'
+Rules:
+  Host         Path  Backends
+  ----         ----  --------
+  yatri.local  
+               /api(/|$)(.*)   yatri-backend:80 (10.244.1.74:8080,10.244.2.70:8080)
+               /               yatri-frontend:80 (10.244.1.72:8080,10.244.2.68:8080)
+Annotations:   nginx.ingress.kubernetes.io/rewrite-target: /$2
+# / goes to the frontend:
+
+$ kubectl -n app-config exec probe -- curl -s -H 'Host: yatri.local' http://10.96.191.177/
+YATRI FRONTEND SITE | uri=/
+# /api/ goes to the backend, with the /api prefix rewritten away:
+
+$ kubectl -n app-config exec probe -- curl -s -H 'Host: yatri.local' http://10.96.191.177/api/
+YATRI BACKEND API | uri=/
+
+$ kubectl -n app-config exec probe -- curl -s -H 'Host: yatri.local' http://10.96.191.177/api/bookings
+YATRI BACKEND API | uri=/bookings
+
+===== 6. Hybrid routing: two hosts, and paths within one of them =====
+
+$ kubectl -n app-config get ingress campus-ingress-tls
+NAME                 CLASS   HOSTS                                  ADDRESS   PORTS     AGE
+campus-ingress-tls   nginx   portal.campus.local,api.campus.local             80, 443   11s
+
+$ kubectl -n app-config describe ingress campus-ingress-tls | sed -n '/Rules:/,/Annotations/p'
+Rules:
+  Host                 Path  Backends
+  ----                 ----  --------
+  portal.campus.local  
+                       /()(.*)   yatri-frontend:80 (10.244.1.72:8080,10.244.2.68:8080)
+  api.campus.local     
+                       /api(/|$)(.*)   yatri-backend:80 (10.244.1.74:8080,10.244.2.70:8080)
+                       /()(.*)         yatri-frontend:80 (10.244.1.72:8080,10.244.2.68:8080)
+Annotations:           nginx.ingress.kubernetes.io/rewrite-target: /$2
+# portal.campus.local -> frontend
+
+$ kubectl -n app-config exec probe -- curl -s -H 'Host: portal.campus.local' http://10.96.191.177/
+<html>
+<head><title>308 Permanent Redirect</title></head>
+<body>
+<center><h1>308 Permanent Redirect</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+# api.campus.local/ -> frontend, but api.campus.local/api/ -> backend
+
+$ kubectl -n app-config exec probe -- curl -s -H 'Host: api.campus.local' http://10.96.191.177/
+<html>
+<head><title>308 Permanent Redirect</title></head>
+<body>
+<center><h1>308 Permanent Redirect</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+$ kubectl -n app-config exec probe -- curl -s -H 'Host: api.campus.local' http://10.96.191.177/api/
+<html>
+<head><title>308 Permanent Redirect</title></head>
+<body>
+<center><h1>308 Permanent Redirect</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+===== 7. TLS termination on 443 =====
+
+$ kubectl -n app-config get secret campus-tls-cert
+NAME              TYPE                DATA   AGE
+campus-tls-cert   kubernetes.io/tls   2      12s
+
+$ kubectl -n app-config get secret campus-tls-cert -o jsonpath='type={.type}{"\n"}'
+type=kubernetes.io/tls
+# the certificate the ingress is serving, read back out of the secret:
+
+$ kubectl -n app-config get secret campus-tls-cert -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -issuer -dates
+subject=CN=campus.local, O=CampusDevOps
+issuer=CN=campus.local, O=CampusDevOps
+notBefore=Sep 17 20:44:39 2026 GMT
+notAfter=Sep 17 20:44:39 2027 GMT
+# an HTTPS request through the controller, -k because it is self signed:
+
+$ kubectl -n app-config exec probe -- curl -sk -H 'Host: portal.campus.local' https://10.96.191.177/ || true
+YATRI FRONTEND SITE | uri=/
+# and with curl from a pod that has it, showing the handshake:
+
+$ kubectl -n app-config exec probe -- curl -sk -v --resolve portal.campus.local:443:10.96.191.177 https://portal.campus.local/ 2>&1 | grep -E 'subject|issuer|SSL connection|HTTP/|^< HTTP' | head -8
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / RSASSA-PSS
+*  subject: CN=campus.local; O=CampusDevOps
+*  issuer: CN=campus.local; O=CampusDevOps
+* using HTTP/2
+* [HTTP/2] [1] OPENED stream for https://portal.campus.local/
+* [HTTP/2] [1] [:method: GET]
+* [HTTP/2] [1] [:scheme: https]
+* [HTTP/2] [1] [:authority: portal.campus.local]
+
+===== 8. Teardown via cleanup.sh =====
+
+$ bash manifests/full-demo/cleanup.sh
+ingress.networking.k8s.io "campus-ingress-tls" deleted from app-config namespace
+ingress.networking.k8s.io "yatri-ingress" deleted from app-config namespace
+configmap "yatri-frontend-nginx" deleted from app-config namespace
+deployment.apps "yatri-frontend" deleted from app-config namespace
+service "yatri-frontend" deleted from app-config namespace
+configmap "yatri-backend-nginx" deleted from app-config namespace
+deployment.apps "yatri-backend" deleted from app-config namespace
+service "yatri-backend" deleted from app-config namespace
+pod "probe" deleted from app-config namespace
+secret "yatri-db-secret" deleted from app-config namespace
+configmap "yatri-app-config" deleted from app-config namespace
+secret "campus-tls-cert" deleted from app-config namespace
+==> remaining in app-config:
+NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/admin   1/1     1            1           178m
+deployment.apps/shop    2/2     2            2           178m
+
+NAME            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+
+
+===== 9. Hybrid routing over HTTPS (the checks in section 6 redone) =====
+# section 6 only ever saw 308 redirects, because this ingress has a tls
+# block and ingress-nginx force redirects http to https by default.
+# repeating them on 443. note --resolve rather than -H 'Host:': over TLS
+# the SNI must match the Host header or nginx answers 400 Bad Request.
+
+$ kubectl -n app-config exec probe -- curl -sk -H 'Host: portal.campus.local' https://10.96.191.177/ | head -3
+YATRI FRONTEND SITE | uri=/
+# with --resolve, which sets SNI and Host together:
+
+$ kubectl -n app-config exec probe -- curl -sk --resolve portal.campus.local:443:10.96.191.177 https://portal.campus.local/
+YATRI FRONTEND SITE | uri=/
+
+$ kubectl -n app-config exec probe -- curl -sk --resolve api.campus.local:443:10.96.191.177 https://api.campus.local/
+YATRI FRONTEND SITE | uri=/
+
+$ kubectl -n app-config exec probe -- curl -sk --resolve api.campus.local:443:10.96.191.177 https://api.campus.local/api/
+YATRI BACKEND API | uri=/
+
+$ kubectl -n app-config exec probe -- curl -sk --resolve api.campus.local:443:10.96.191.177 https://api.campus.local/api/payments
+YATRI BACKEND API | uri=/payments
+# and the http redirect itself, with headers:
+
+$ kubectl -n app-config exec probe -- curl -s -o /dev/null -D - -H 'Host: portal.campus.local' http://10.96.191.177/ | head -4
+HTTP/1.1 308 Permanent Redirect
+Date: Thu, 17 Sep 2026 23:52:43 GMT
+Content-Type: text/html
+Content-Length: 164
+
+===== Done. Output saved to output-full.log =====

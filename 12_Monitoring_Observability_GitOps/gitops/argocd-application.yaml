@@ -1,0 +1,22 @@
+# Points Argo CD at this repo. Argo watches the path and reconciles the
+# cluster to whatever Git says, which is the whole idea of GitOps.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitops-demo
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Manasvi-247/devops-assignment-2.git
+    targetRevision: main
+    path: 12_Monitoring_Observability_GitOps/gitops/app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gitops-demo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

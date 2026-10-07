@@ -1,0 +1,16 @@
+# Client used for the in-cluster HTTP and TLS checks. The app images are nginx
+# and have no curl, so the requests are made from here.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe
+  namespace: app-config
+  labels: {app: yatri-app, tier: client}
+spec:
+  containers:
+    - name: curl
+      image: curlimages/curl:8.7.1
+      command: ["sleep", "7200"]
+      resources:
+        requests: {cpu: "10m", memory: "16Mi"}
+        limits: {cpu: "100m", memory: "64Mi"}

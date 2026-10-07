@@ -1,0 +1,99 @@
+name: Security
+
+# Scoped to the application folder and manual runs, so it does not fire on
+# every push to the repo.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '13_Final_Project_TaskBoard/**'
+      - '.github/workflows/security.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  sast:
+    name: SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install bandit[sarif]
+      - name: Scan source for insecure patterns
+        run: bandit -r 13_Final_Project_TaskBoard/backend/app -f txt -o bandit.txt || true
+      - run: cat bandit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit.txt
+
+  sca:
+    name: SCA (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - name: Audit declared dependencies
+        run: |
+          pip-audit -r 13_Final_Project_TaskBoard/backend/requirements.txt \
+            --format columns | tee pip-audit.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit.txt
+
+  secrets:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan history for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image-scan:
+    name: Image scan (trivy) and security gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image to scan
+        run: docker build -t taskboard-backend:scan 13_Final_Project_TaskBoard/backend
+
+      - name: Report every vulnerability found
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: taskboard-backend:scan
+          format: table
+          output: trivy-report.txt
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - run: cat trivy-report.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+
+      # The gate. exit-code 1 fails the job when anything HIGH or CRITICAL is
+      # present, which is what stops a vulnerable image reaching a registry.
+      - name: Security gate, fail on HIGH or CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: taskboard-backend:scan
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'

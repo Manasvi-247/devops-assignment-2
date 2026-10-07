@@ -1,9 +1,16 @@
-# Two ways to run this configuration.
-#
-# Against real AWS: leave the endpoints block out, or pass -var use_localstack=false.
-# Against LocalStack: the endpoints below point every AWS call at the local
-# container, so apply can be demonstrated without a cloud account. The
-# resource definitions in main.tf are identical either way, which is the point.
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+# Against real AWS, pass -var use_localstack=false. Against LocalStack the
+# endpoints below redirect every call to the local container. The resources in
+# main.tf do not change either way.
 provider "aws" {
   region = var.aws_region
 
@@ -12,12 +19,10 @@ provider "aws" {
   skip_credentials_validation = var.use_localstack
   skip_metadata_api_check     = var.use_localstack
   skip_requesting_account_id  = var.use_localstack
-  s3_use_path_style           = var.use_localstack
 
   dynamic "endpoints" {
     for_each = var.use_localstack ? [1] : []
     content {
-      s3  = var.localstack_endpoint
       ec2 = var.localstack_endpoint
       sts = var.localstack_endpoint
       iam = var.localstack_endpoint

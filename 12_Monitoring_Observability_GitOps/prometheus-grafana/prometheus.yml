@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # Prometheus scraping itself, which is always available as a first target
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Host and container metrics
+  - job_name: node-exporter
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']

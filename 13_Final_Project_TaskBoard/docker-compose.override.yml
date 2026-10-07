@@ -1,0 +1,15 @@
+# Ports 8000, 3000 and 5432 are already taken on this machine, so the host side
+# of each mapping moves. !override replaces the list from docker-compose.yml
+# instead of appending to it, which is the compose default for sequences.
+# Container ports are unchanged, so the frontend to backend proxy inside the
+# compose network is unaffected.
+services:
+  postgres:
+    ports: !override
+      - "15432:5432"
+  backend:
+    ports: !override
+      - "18000:8000"
+  frontend:
+    ports: !override
+      - "13000:80"
