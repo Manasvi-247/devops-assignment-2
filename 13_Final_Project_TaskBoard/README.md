@@ -786,34 +786,52 @@ Terminal captures, all rendered straight from [`output.log`](output.log):
 
 ![Build, then Waiting and Healthy before the backend starts](screenshots/s21-02-build-and-start.png)
 
-![Prometheus metrics and pytest inside the container](screenshots/s21-08-metrics-and-pytest.png)
-
 ### The running application
 
 Captured from the browser, since a terminal log cannot show the interface.
 
-| What it shows | Capture |
-|---|---|
-| The board: sidebar filters with live counts, three stage columns, priority as a stripe | [s21-09-ui-dashboard.png](screenshots/s21-09-ui-dashboard.png) |
-| Creating a task, with validation on the title | [s21-10-ui-new-task.png](screenshots/s21-10-ui-new-task.png) |
-| Filtering to high priority, which rewrites the columns and the subtitle | [s21-11-ui-priority-filter.png](screenshots/s21-11-ui-priority-filter.png) |
-| The new task after being advanced from To do into In progress | [s21-12-ui-status-advanced.png](screenshots/s21-12-ui-status-advanced.png) |
-| Swagger UI, `POST /api/tasks` expanded with its request schema | [s21-13-ui-swagger.png](screenshots/s21-13-ui-swagger.png) |
-| ReDoc, `DELETE /api/tasks/{task_id}` with its 204 and 422 responses | [s21-14-ui-redoc.png](screenshots/s21-14-ui-redoc.png) |
+**The board.** Three stage columns rather than a table with a status field,
+because moving work between stages is what the data represents. Priority is a
+stripe down the left edge of each card, so it reads at a glance without hunting
+for a tag. Every control in the sidebar does something: the filters rewrite the
+board and carry live counts, and the completion bar is computed from the tasks.
 
-![The delivery board](screenshots/s21-09-ui-dashboard.png)
+![The delivery board, 11 tasks across three stages](screenshots/s21-09-ui-dashboard.png)
 
-![Creating a task](screenshots/s21-10-ui-new-task.png)
+**Creating a task.** The title is required and validated before the request is
+sent, so an empty title never reaches the API.
 
-Worth reading the three together. The board shows 11 tasks and `3 of 11`
-completed. After creating "Exam Prep" the sidebar counts read 12, and Medium
-moves from 3 to 4. Advancing it puts it at the top of In progress, which goes
-from 3 to 5 across the two steps. Nothing was reloaded by hand: each action
-calls the API and the board re-reads it.
+![Creating a task, with the title validated](screenshots/s21-10-ui-new-task.png)
 
-The two API documentation pages come free from FastAPI. Both are generated from
-the same type hints and pydantic models the endpoints already declare, so they
-cannot drift from the implementation the way a hand written API document does.
+**Filtering.** Choosing a priority rewrites the columns and the subtitle, and
+the per column counts recalculate. Here 5 high priority tasks split 2, 1, 2
+across the three stages, out of 12 on the board.
+
+![Filtered to high priority](screenshots/s21-11-ui-priority-filter.png)
+
+**Advancing a task.** The new task has moved from To do into In progress. The
+sidebar now reads 12 tasks with Medium at 4, and In progress has gone from 3 to
+5 across the two steps.
+
+![The new task advanced into In progress](screenshots/s21-12-ui-status-advanced.png)
+
+Worth reading those three together. Nothing was reloaded by hand: each action
+calls the API and the board re-reads it, which is why the counts in the sidebar
+and the column heads stay consistent with each other.
+
+**Swagger UI**, served by FastAPI at `/docs`, with `POST /api/tasks` expanded
+to show the request schema and the 201 response.
+
+![Swagger UI with POST /api/tasks expanded](screenshots/s21-13-ui-swagger.png)
+
+**ReDoc**, the second documentation view at `/redoc`, showing
+`DELETE /api/tasks/{task_id}` with both its 204 and 422 responses.
+
+![ReDoc showing the delete endpoint](screenshots/s21-14-ui-redoc.png)
+
+Both documentation pages come free. They are generated from the same type hints
+and pydantic models the endpoints already declare, so unlike a hand written API
+document they cannot drift from the implementation.
 
 ## 13. Reproducing this
 
