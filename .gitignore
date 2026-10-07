@@ -7,3 +7,12 @@ kubeconfig
 *.log
 !*/output.log
 !*/output-*.log
+
+# terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+**/generated/
+
+# node
+node_modules/
