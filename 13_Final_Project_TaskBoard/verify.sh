@@ -104,7 +104,9 @@ run "curl -s $API/metrics | grep -E '^http_requests_total|^http_request_duration
 
 echo "" | tee -a "$LOG"
 echo "===== 10. Pytest inside the backend image =====" | tee -a "$LOG"
-run "docker compose exec -T backend sh -c 'pip install -q pytest httpx >/dev/null 2>&1; python -m pytest -v' || true"
+note "pytest ships in the image. it runs against a throwaway sqlite file in /tmp"
+note "so the live postgres data is left alone"
+run "docker compose exec -T -w /tmp -e DATABASE_URL=sqlite:////tmp/test.db backend python -m pytest -v /app/tests"
 
 echo "" | tee -a "$LOG"
 echo "===== 11. Persistence: data survives a restart =====" | tee -a "$LOG"

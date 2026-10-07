@@ -1,15 +1,35 @@
-# Ports 8000, 3000 and 5432 are already taken on this machine, so the host side
-# of each mapping moves. !override replaces the list from docker-compose.yml
-# instead of appending to it, which is the compose default for sequences.
-# Container ports are unchanged, so the frontend to backend proxy inside the
-# compose network is unaffected.
+# Two local adjustments on top of docker-compose.yml.
+#
+# 1. Ports 8000, 3000 and 5432 are already taken on this machine, so the host
+#    side of each mapping moves. !override replaces the list from
+#    docker-compose.yml instead of appending to it, which is the compose
+#    default for sequences. Container ports are unchanged, so the frontend to
+#    backend proxy inside the compose network is unaffected.
+# 2. depends_on in the base file is the short form, which waits only for the
+#    container to start, not for postgres to accept connections. The backend
+#    runs alembic as its first act and exited 1 on a refused connection. A
+#    healthcheck plus condition: service_healthy makes the wait real.
+#
+# Each mapping also binds to 127.0.0.1. The default is 0.0.0.0, which put the
+# API on the open network and let an outside host POST a task into the board
+# mid-run. A development stack has no business listening beyond loopback.
 services:
   postgres:
     ports: !override
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskboard -d taskboard"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
   backend:
     ports: !override
-      - "18000:8000"
+      - "127.0.0.1:18000:8000"
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
   frontend:
     ports: !override
-      - "13000:80"
+      - "127.0.0.1:13000:80"

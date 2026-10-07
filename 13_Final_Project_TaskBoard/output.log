@@ -9,8 +9,8 @@ frontend
 $ docker compose config | grep -A3 published || true
         published: "18000"
         protocol: tcp
+    restart: unless-stopped
   frontend:
-    build:
 --
         published: "13000"
         protocol: tcp
@@ -64,28 +64,28 @@ $ docker compose up -d --build --quiet-pull
 #1 DONE 0.0s
 
 #2 [backend internal] load build definition from Dockerfile
-#2 transferring dockerfile: 416B done
+#2 transferring dockerfile: 534B done
 #2 DONE 0.0s
 
 #3 [frontend internal] load build definition from Dockerfile
 #3 transferring dockerfile: 276B done
 #3 DONE 0.0s
 
-#4 [backend internal] load metadata for docker.io/library/python:3.12-slim
+#4 [frontend internal] load metadata for docker.io/library/nginx:1.27-alpine
 #4 DONE 0.0s
 
-#5 [frontend internal] load metadata for docker.io/library/node:22-alpine
+#5 [backend internal] load metadata for docker.io/library/python:3.12-slim
 #5 DONE 0.0s
 
-#6 [frontend internal] load metadata for docker.io/library/nginx:1.27-alpine
+#6 [frontend internal] load metadata for docker.io/library/node:22-alpine
 #6 DONE 0.0s
 
-#7 [backend internal] load .dockerignore
-#7 transferring context: 95B done
+#7 [frontend internal] load .dockerignore
+#7 transferring context: 63B done
 #7 DONE 0.0s
 
-#8 [frontend internal] load .dockerignore
-#8 transferring context: 63B done
+#8 [backend internal] load .dockerignore
+#8 transferring context: 95B done
 #8 DONE 0.0s
 
 #9 [frontend internal] load build context
@@ -93,85 +93,91 @@ $ docker compose up -d --build --quiet-pull
 #9 DONE 0.0s
 
 #10 [backend internal] load build context
-#10 transferring context: 480B done
+#10 transferring context: 1.17kB done
 #10 DONE 0.0s
 
-#11 [frontend build 1/6] FROM docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
-#11 resolve docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 0.0s done
+#11 [frontend stage-1 1/3] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#11 resolve docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 0.0s done
 #11 DONE 0.0s
 
-#12 [backend 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
-#12 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done
+#12 [frontend build 1/6] FROM docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+#12 resolve docker.io/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 0.0s done
 #12 DONE 0.0s
 
-#13 [frontend stage-1 1/3] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
-#13 resolve docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 0.0s done
+#13 [backend 1/9] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+#13 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done
 #13 DONE 0.0s
 
-#14 [backend 5/7] COPY alembic.ini ./
+#14 [frontend stage-1 2/3] COPY --from=build /app/dist /usr/share/nginx/html
 #14 CACHED
 
-#15 [backend 6/7] COPY alembic ./alembic
+#15 [frontend build 3/6] COPY package*.json ./
 #15 CACHED
 
-#16 [backend 2/7] WORKDIR /app
+#16 [frontend build 2/6] WORKDIR /app
 #16 CACHED
 
-#17 [backend 4/7] RUN pip install --no-cache-dir -r requirements.txt && useradd --create-home --uid 10001 appuser
+#17 [frontend build 6/6] RUN npm run build
 #17 CACHED
 
-#18 [backend 3/7] COPY requirements.txt .
+#18 [frontend build 4/6] RUN npm install
 #18 CACHED
 
-#19 [backend 7/7] COPY app ./app
+#19 [frontend build 5/6] COPY . .
 #19 CACHED
 
-#20 [frontend build 4/6] RUN npm install
+#20 [frontend stage-1 3/3] COPY nginx.conf /etc/nginx/conf.d/default.conf
 #20 CACHED
 
-#21 [frontend stage-1 2/3] COPY --from=build /app/dist /usr/share/nginx/html
+#21 [backend 6/9] COPY alembic ./alembic
 #21 CACHED
 
-#22 [frontend build 5/6] COPY . .
+#22 [backend 8/9] COPY pytest.ini ./
 #22 CACHED
 
-#23 [frontend build 3/6] COPY package*.json ./
+#23 [backend 2/9] WORKDIR /app
 #23 CACHED
 
-#24 [frontend build 6/6] RUN npm run build
+#24 [backend 3/9] COPY requirements.txt .
 #24 CACHED
 
-#25 [frontend build 2/6] WORKDIR /app
+#25 [backend 7/9] COPY app ./app
 #25 CACHED
 
-#26 [frontend stage-1 3/3] COPY nginx.conf /etc/nginx/conf.d/default.conf
+#26 [backend 4/9] RUN pip install --no-cache-dir -r requirements.txt && useradd --create-home --uid 10001 appuser
 #26 CACHED
 
-#27 [backend] exporting to image
-#27 exporting layers done
-#27 exporting manifest sha256:dec9d589ad17e1160cf6612a3acd635d73c0fe0d20bea1bf1a711d1f065ab8b8 done
-#27 exporting config sha256:cc34b45d11cb4f5ef36347e1bf7ad587891d78c86748b7616b09646bff7c5277 done
-#27 exporting attestation manifest sha256:213a61289c646d84580b24f63f44566a7807b5124ee99fd2e8a7b42316c79861 0.0s done
-#27 exporting manifest list sha256:75977c8306f8e608db6ace24a3be3b1a34c11e0b52189fa62699146b8d998516 done
-#27 naming to docker.io/library/13_final_project_taskboard-backend:latest done
-#27 unpacking to docker.io/library/13_final_project_taskboard-backend:latest done
-#27 DONE 0.1s
+#27 [backend 5/9] COPY alembic.ini ./
+#27 CACHED
 
-#28 [frontend] exporting to image
-#28 exporting layers done
-#28 exporting manifest sha256:b668a930ce4000631385a328c9e479b2e8d6b75efac8c1053b152f7323ba0421 done
-#28 exporting config sha256:1fc27945f731661d9a33132ba2908c1fea3418dd70c4d604cda68b089801528c done
-#28 exporting attestation manifest sha256:e20737d0badc73e4f7d4268470ed6fde5d48bd4ad113b09fb45aa84fa1a86786 0.0s done
-#28 exporting manifest list sha256:324e5d33fc0cff076cb015ca6a01d51fd55daf5dd4f6d1679f1a5af806adbc87 done
-#28 naming to docker.io/library/13_final_project_taskboard-frontend:latest done
-#28 unpacking to docker.io/library/13_final_project_taskboard-frontend:latest done
-#28 DONE 0.1s
+#28 [backend 9/9] COPY tests ./tests
+#28 CACHED
 
-#29 [backend] resolving provenance for metadata file
-#29 DONE 0.0s
+#29 [frontend] exporting to image
+#29 exporting layers done
+#29 exporting manifest sha256:b668a930ce4000631385a328c9e479b2e8d6b75efac8c1053b152f7323ba0421 done
+#29 exporting config sha256:1fc27945f731661d9a33132ba2908c1fea3418dd70c4d604cda68b089801528c done
+#29 exporting attestation manifest sha256:7070fbd4c19652385767a87b26a6110d2e93ead520b1ef8ddd06c1627623f085 0.0s done
+#29 exporting manifest list sha256:0e46acfd02ef32c76fcb43aafce13278b4f9067e5c3c07b81d2148ba43d07980 done
+#29 naming to docker.io/library/13_final_project_taskboard-frontend:latest done
+#29 unpacking to docker.io/library/13_final_project_taskboard-frontend:latest done
+#29 DONE 0.1s
 
-#30 [frontend] resolving provenance for metadata file
-#30 DONE 0.0s
+#30 [backend] exporting to image
+#30 exporting layers done
+#30 exporting manifest sha256:ceb65914a065f50547d177b43d77ca4394041fc127e1ad59cb10fb03a3abd4cf done
+#30 exporting config sha256:4be9870416926b12b5eb31564fc3dbf4c8511c6b0f21390004d92a94a3428a69 done
+#30 exporting attestation manifest sha256:821de8dde74b0c67a457bebe884292437568f4b8f33add2816422582175f48b3 0.0s done
+#30 exporting manifest list sha256:f90bb5686346f873d5cb2a8877ea36303bf3d85b9927d048883ce59ddd50c58b done
+#30 naming to docker.io/library/13_final_project_taskboard-backend:latest done
+#30 unpacking to docker.io/library/13_final_project_taskboard-backend:latest done
+#30 DONE 0.1s
+
+#31 [frontend] resolving provenance for metadata file
+#31 DONE 0.0s
+
+#32 [backend] resolving provenance for metadata file
+#32 DONE 0.0s
  13_final_project_taskboard-backend  Built
  13_final_project_taskboard-frontend  Built
  Network 13_final_project_taskboard_default  Creating
@@ -186,6 +192,8 @@ $ docker compose up -d --build --quiet-pull
  Container 13_final_project_taskboard-frontend-1  Created
  Container 13_final_project_taskboard-postgres-1  Starting
  Container 13_final_project_taskboard-postgres-1  Started
+ Container 13_final_project_taskboard-postgres-1  Waiting
+ Container 13_final_project_taskboard-postgres-1  Healthy
  Container 13_final_project_taskboard-backend-1  Starting
  Container 13_final_project_taskboard-backend-1  Started
  Container 13_final_project_taskboard-frontend-1  Starting
@@ -193,102 +201,217 @@ $ docker compose up -d --build --quiet-pull
 # waiting for the backend to answer its health endpoint
 
 $ docker compose ps
-NAME                                    IMAGE                                 COMMAND                  SERVICE    CREATED         STATUS         PORTS
-13_final_project_taskboard-frontend-1   13_final_project_taskboard-frontend   "/docker-entrypoint.…"   frontend   5 minutes ago   Up 5 minutes   0.0.0.0:13000->80/tcp, [::]:13000->80/tcp
-13_final_project_taskboard-postgres-1   postgres:16-alpine                    "docker-entrypoint.s…"   postgres   5 minutes ago   Up 5 minutes   0.0.0.0:15432->5432/tcp, [::]:15432->5432/tcp
+NAME                                    IMAGE                                 COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+13_final_project_taskboard-backend-1    13_final_project_taskboard-backend    "sh -c 'alembic upgr…"   backend    11 seconds ago   Up 5 seconds              127.0.0.1:18000->8000/tcp
+13_final_project_taskboard-frontend-1   13_final_project_taskboard-frontend   "/docker-entrypoint.…"   frontend   11 seconds ago   Up 5 seconds              127.0.0.1:13000->80/tcp
+13_final_project_taskboard-postgres-1   postgres:16-alpine                    "docker-entrypoint.s…"   postgres   11 seconds ago   Up 11 seconds (healthy)   127.0.0.1:15432->5432/tcp
 
 ===== 3. Container images that were built =====
 
 $ docker compose images
 CONTAINER                               REPOSITORY                            TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
-13_final_project_taskboard-backend-1    13_final_project_taskboard-backend    latest              linux/arm64         75977c8306f8        70.5MB              5 minutes ago
-13_final_project_taskboard-frontend-1   13_final_project_taskboard-frontend   latest              linux/arm64         324e5d33fc0c        21.9MB              5 minutes ago
-13_final_project_taskboard-postgres-1   postgres                              16-alpine           linux/arm64/v8      721873c34ceb        114MB               5 minutes ago
+13_final_project_taskboard-backend-1    13_final_project_taskboard-backend    latest              linux/arm64         f90bb5686346        70.8MB              11 seconds ago
+13_final_project_taskboard-frontend-1   13_final_project_taskboard-frontend   latest              linux/arm64         0e46acfd02ef        21.9MB              11 seconds ago
+13_final_project_taskboard-postgres-1   postgres                              16-alpine           linux/arm64/v8      721873c34ceb        114MB               12 seconds ago
 
 ===== 4. Database: migrations applied by the backend on startup =====
 
 $ docker compose logs backend --tail=12
-backend-1  |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/create.py", line 643, in connect
-backend-1  |     return dialect.connect(*cargs, **cparams)
-backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend-1  |   File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 621, in connect
-backend-1  |     return self.loaded_dbapi.connect(*cargs, **cparams)
-backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend-1  |   File "/usr/local/lib/python3.12/site-packages/psycopg/connection.py", line 119, in connect
-backend-1  |     raise last_ex.with_traceback(None)
-backend-1  | sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection failed: connection to server at "172.24.0.2", port 5432 failed: Connection refused
-backend-1  | 	Is the server running on that host and accepting TCP/IP connections?
-backend-1  | (Background on this error at: https://sqlalche.me/e/20/e3q8)
+backend-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+backend-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+backend-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_create_tasks
+backend-1  | INFO:     Started server process [8]
+backend-1  | INFO:     Waiting for application startup.
+backend-1  | INFO:     Application startup complete.
+backend-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+backend-1  | INFO:     172.24.0.1:59086 - "GET /health HTTP/1.1" 200 OK
 # the tasks table exists, created by the alembic migration
 
 $ docker compose exec -T postgres psql -U taskboard -d taskboard -c '\dt'
-Did not find any relations.
+              List of relations
+ Schema |      Name       | Type  |   Owner   
+--------+-----------------+-------+-----------
+ public | alembic_version | table | taskboard
+ public | tasks           | table | taskboard
+(2 rows)
+
 
 $ docker compose exec -T postgres psql -U taskboard -d taskboard -c '\d tasks'
-Did not find any relation named "tasks".
+                                       Table "public.tasks"
+   Column    |           Type           | Collation | Nullable |              Default              
+-------------+--------------------------+-----------+----------+-----------------------------------
+ id          | integer                  |           | not null | nextval('tasks_id_seq'::regclass)
+ title       | character varying(200)   |           | not null | 
+ description | text                     |           | not null | ''::text
+ priority    | character varying(20)    |           | not null | 'MEDIUM'::character varying
+ status      | character varying(30)    |           | not null | 'TODO'::character varying
+ assignee    | character varying(120)   |           | not null | 'Unassigned'::character varying
+ created_at  | timestamp with time zone |           | not null | 
+Indexes:
+    "tasks_pkey" PRIMARY KEY, btree (id)
+
 
 ===== 5. Backend API: health and readiness =====
 
 $ curl -s http://localhost:18000/ | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "service": "TaskBoard API",
+    "version": "1.0.0",
+    "docs": "/docs"
+}
 
 $ curl -s http://localhost:18000/health | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "status": "UP"
+}
 
 $ curl -s http://localhost:18000/ready | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "status": "READY"
+}
 
 ===== 6. Backend API: full CRUD cycle =====
 # GET on an empty board
 
 $ curl -s http://localhost:18000/api/tasks | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+[]
 # POST three tasks
 
 $ curl -s -X POST http://localhost:18000/api/tasks -H 'Content-Type: application/json' -d '{"title":"Write the Dockerfile","description":"multi stage build for the frontend","priority":"HIGH","assignee":"Manasvi"}' | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "title": "Write the Dockerfile",
+    "description": "multi stage build for the frontend",
+    "priority": "HIGH",
+    "status": "TODO",
+    "assignee": "Manasvi",
+    "id": 1,
+    "created_at": "2026-10-07T18:02:16.483043Z"
+}
 
 $ curl -s -X POST http://localhost:18000/api/tasks -H 'Content-Type: application/json' -d '{"title":"Run docker compose up","priority":"MEDIUM","assignee":"Manasvi"}' | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "title": "Run docker compose up",
+    "description": "",
+    "priority": "MEDIUM",
+    "status": "TODO",
+    "assignee": "Manasvi",
+    "id": 2,
+    "created_at": "2026-10-07T18:02:16.517583Z"
+}
 
 $ curl -s -X POST http://localhost:18000/api/tasks -H 'Content-Type: application/json' -d '{"title":"Test the API endpoints","priority":"LOW","assignee":"Manasvi"}' | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "title": "Test the API endpoints",
+    "description": "",
+    "priority": "LOW",
+    "status": "TODO",
+    "assignee": "Manasvi",
+    "id": 3,
+    "created_at": "2026-10-07T18:02:16.556293Z"
+}
 # GET the list again, now with three rows
 
 $ curl -s http://localhost:18000/api/tasks | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+[
+    {
+        "title": "Test the API endpoints",
+        "description": "",
+        "priority": "LOW",
+        "status": "TODO",
+        "assignee": "Manasvi",
+        "id": 3,
+        "created_at": "2026-10-07T18:02:16.556293Z"
+    },
+    {
+        "title": "Run docker compose up",
+        "description": "",
+        "priority": "MEDIUM",
+        "status": "TODO",
+        "assignee": "Manasvi",
+        "id": 2,
+        "created_at": "2026-10-07T18:02:16.517583Z"
+    },
+    {
+        "title": "Write the Dockerfile",
+        "description": "multi stage build for the frontend",
+        "priority": "HIGH",
+        "status": "TODO",
+        "assignee": "Manasvi",
+        "id": 1,
+        "created_at": "2026-10-07T18:02:16.483043Z"
+    }
+]
 # GET one task by id
 
 $ curl -s http://localhost:18000/api/tasks/1 | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "title": "Write the Dockerfile",
+    "description": "multi stage build for the frontend",
+    "priority": "HIGH",
+    "status": "TODO",
+    "assignee": "Manasvi",
+    "id": 1,
+    "created_at": "2026-10-07T18:02:16.483043Z"
+}
 # PUT to update task 1
 
 $ curl -s -X PUT http://localhost:18000/api/tasks/1 -H 'Content-Type: application/json' -d '{"title":"Write the Dockerfile","status":"DONE","priority":"HIGH","assignee":"Manasvi"}' | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "title": "Write the Dockerfile",
+    "description": "multi stage build for the frontend",
+    "priority": "HIGH",
+    "status": "DONE",
+    "assignee": "Manasvi",
+    "id": 1,
+    "created_at": "2026-10-07T18:02:16.483043Z"
+}
 # the stats endpoint reflects the change
 
 $ curl -s http://localhost:18000/api/tasks/stats | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+{
+    "total": 3,
+    "todo": 2,
+    "inProgress": 0,
+    "done": 1
+}
 # DELETE task 3, which returns 204 with no body
 
 $ curl -s -o /dev/null -w 'HTTP %{http_code}\n' -X DELETE http://localhost:18000/api/tasks/3
-HTTP 000
+HTTP 204
 
 $ curl -s http://localhost:18000/api/tasks | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+[
+    {
+        "title": "Run docker compose up",
+        "description": "",
+        "priority": "MEDIUM",
+        "status": "TODO",
+        "assignee": "Manasvi",
+        "id": 2,
+        "created_at": "2026-10-07T18:02:16.517583Z"
+    },
+    {
+        "title": "Write the Dockerfile",
+        "description": "multi stage build for the frontend",
+        "priority": "HIGH",
+        "status": "DONE",
+        "assignee": "Manasvi",
+        "id": 1,
+        "created_at": "2026-10-07T18:02:16.483043Z"
+    }
+]
 
 ===== 7. Error handling =====
 # a task that does not exist
 
 $ curl -s -w '\nHTTP %{http_code}\n' http://localhost:18000/api/tasks/999
-
-HTTP 000
+{"detail":"Task not found"}
+HTTP 404
 # a POST missing the required title
 
 $ curl -s -w '\nHTTP %{http_code}\n' -X POST http://localhost:18000/api/tasks -H 'Content-Type: application/json' -d '{"priority":"HIGH"}'
-
-HTTP 000
+{"detail":[{"type":"missing","loc":["body","title"],"msg":"Field required","input":{"priority":"HIGH"}}]}
+HTTP 422
 
 ===== 8. Frontend =====
 
@@ -302,29 +425,126 @@ $ curl -s http://localhost:13000/ | head -20
 # nginx proxies /api to the backend container, so the SPA calls work
 
 $ curl -s http://localhost:13000/api/tasks | python3 -m json.tool
-Expecting value: line 1 column 1 (char 0)
+[
+    {
+        "title": "Run docker compose up",
+        "description": "",
+        "priority": "MEDIUM",
+        "status": "TODO",
+        "assignee": "Manasvi",
+        "id": 2,
+        "created_at": "2026-10-07T18:02:16.517583Z"
+    },
+    {
+        "title": "Write the Dockerfile",
+        "description": "multi stage build for the frontend",
+        "priority": "HIGH",
+        "status": "DONE",
+        "assignee": "Manasvi",
+        "id": 1,
+        "created_at": "2026-10-07T18:02:16.483043Z"
+    }
+]
 
 ===== 9. Prometheus metrics endpoint =====
 # the backend exposes /metrics, which is what session 20 scrapes
 
 $ curl -s http://localhost:18000/metrics | grep -E '^http_requests_total|^http_request_duration' | head -6
+http_requests_total{handler="/health",method="GET",status="2xx"} 2.0
+http_requests_total{handler="/",method="GET",status="2xx"} 1.0
+http_requests_total{handler="/ready",method="GET",status="2xx"} 1.0
+http_requests_total{handler="/api/tasks",method="GET",status="2xx"} 4.0
+http_requests_total{handler="/api/tasks",method="POST",status="2xx"} 3.0
+http_requests_total{handler="/api/tasks/{task_id}",method="GET",status="2xx"} 1.0
 
 ===== 10. Pytest inside the backend image =====
+# pytest ships in the image. it runs against a throwaway sqlite file in /tmp
+# so the live postgres data is left alone
 
-$ docker compose exec -T backend sh -c 'pip install -q pytest httpx >/dev/null 2>&1; python -m pytest -v' || true
-service "backend" is not running
+$ docker compose exec -T -w /tmp -e DATABASE_URL=sqlite:////tmp/test.db backend python -m pytest -v /app/tests
+============================= test session starts ==============================
+platform linux -- Python 3.12.15, pytest-8.3.4, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pytest.ini
+plugins: anyio-4.15.1
+collecting ... collected 10 items
+
+../app/tests/test_api.py::test_health PASSED                             [ 10%]
+../app/tests/test_api.py::test_root PASSED                               [ 20%]
+../app/tests/test_api.py::test_create_task_validation PASSED             [ 30%]
+../app/tests/test_api.py::test_ready PASSED                              [ 40%]
+../app/tests/test_api.py::test_list_tasks_returns_a_list PASSED          [ 50%]
+../app/tests/test_api.py::test_get_task_not_found PASSED                 [ 60%]
+../app/tests/test_api.py::test_update_task PASSED                        [ 70%]
+../app/tests/test_api.py::test_delete_task PASSED                        [ 80%]
+../app/tests/test_api.py::test_stats_shape PASSED                        [ 90%]
+../app/tests/test_api.py::test_create_requires_a_title PASSED            [100%]
+
+=============================== warnings summary ===============================
+../usr/local/lib/python3.12/site-packages/starlette/testclient.py:45
+  /usr/local/lib/python3.12/site-packages/starlette/testclient.py:45: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+../app/app/main.py:16
+  /app/app/main.py:16: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../usr/local/lib/python3.12/site-packages/fastapi/applications.py:4744
+  /usr/local/lib/python3.12/site-packages/fastapi/applications.py:4744: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+../usr/local/lib/python3.12/site-packages/_pytest/cacheprovider.py:475
+  /usr/local/lib/python3.12/site-packages/_pytest/cacheprovider.py:475: PytestCacheWarning: could not create cache path /app/.pytest_cache/v/cache/nodeids: [Errno 13] Permission denied: '/app/pytest-cache-files-iayw04xk'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+../usr/local/lib/python3.12/site-packages/_pytest/stepwise.py:51
+  /usr/local/lib/python3.12/site-packages/_pytest/stepwise.py:51: PytestCacheWarning: could not create cache path /app/.pytest_cache/v/cache/stepwise: [Errno 13] Permission denied: '/app/pytest-cache-files-6f6v5po0'
+    session.config.cache.set(STEPWISE_CACHE_DIR, [])
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 10 passed, 5 warnings in 0.24s ========================
 
 ===== 11. Persistence: data survives a restart =====
 
 $ docker compose restart backend postgres
- Container 13_final_project_taskboard-postgres-1  Restarting
  Container 13_final_project_taskboard-backend-1  Restarting
- Container 13_final_project_taskboard-backend-1  Started
+ Container 13_final_project_taskboard-postgres-1  Restarting
  Container 13_final_project_taskboard-postgres-1  Started
+ Container 13_final_project_taskboard-backend-1  Started
 # the tasks are still there, because the postgres volume persisted
 
 $ curl -s http://localhost:18000/api/tasks | python3 -m json.tool
-[]
+[
+    {
+        "title": "Run docker compose up",
+        "description": "",
+        "priority": "MEDIUM",
+        "status": "TODO",
+        "assignee": "Manasvi",
+        "id": 2,
+        "created_at": "2026-10-07T18:02:16.517583Z"
+    },
+    {
+        "title": "Write the Dockerfile",
+        "description": "multi stage build for the frontend",
+        "priority": "HIGH",
+        "status": "DONE",
+        "assignee": "Manasvi",
+        "id": 1,
+        "created_at": "2026-10-07T18:02:16.483043Z"
+    }
+]
 
 $ docker volume ls | grep -i taskboard || docker volume ls | head -5
 local     13_final_project_taskboard_postgres-data
