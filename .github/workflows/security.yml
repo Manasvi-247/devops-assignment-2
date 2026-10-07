@@ -72,7 +72,7 @@ jobs:
         run: docker build -t taskboard-backend:scan 13_Final_Project_TaskBoard/backend
 
       - name: Report every vulnerability found
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: taskboard-backend:scan
           format: table
@@ -90,7 +90,7 @@ jobs:
       # The gate. exit-code 1 fails the job when anything HIGH or CRITICAL is
       # present, which is what stops a vulnerable image reaching a registry.
       - name: Security gate, fail on HIGH or CRITICAL
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: taskboard-backend:scan
           format: table
