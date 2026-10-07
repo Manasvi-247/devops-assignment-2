@@ -13,7 +13,7 @@ Two configurations in this folder:
 | Directory | Provider | Applied |
 |---|---|---|
 | [`local-demo/`](local-demo) | `local` and `random` | yes, the whole lifecycle |
-| [`aws-s3-demo/`](aws-s3-demo) | `aws` | no, see section 11 |
+| [`aws-s3-demo/`](aws-s3-demo) | `aws` | yes, against LocalStack, see section 11 |
 
 The lifecycle is identical whichever provider you use, which is the point of
 the abstraction. `local-demo` creates real files on disk, so every stage of the
@@ -306,16 +306,12 @@ the real AWS provider:
 ```text
 $ terraform init -no-color
 - Installed hashicorp/aws v5.100.0 (signed by HashiCorp)
-Terraform has been successfully initialized!
 
 $ terraform validate -no-color
 Success! The configuration is valid.
-
-$ terraform fmt -check -no-color && echo 'formatting is already canonical'
-formatting is already canonical
 ```
 
-**`apply` was not run, and the reason is recorded rather than hidden:**
+### Why it does not apply to the real account
 
 ```text
 $ aws s3api list-buckets
@@ -325,21 +321,92 @@ s3:ListAllMyBuckets with an explicit deny in a service control policy:
 arn:aws:organizations::923788823696:policy/o-yfi7wi4tks/service_control_policy/p-sz2h13a2
 ```
 
-The AWS account exists and the credentials work, but it sits on the AWS free
-plan, which places the account inside an AWS managed Organization whose Service
-Control Policy explicitly denies S3 and EC2.
+The account exists and the credentials work, but it sits on the AWS free plan,
+which places it inside an AWS managed Organization whose Service Control Policy
+denies S3 and EC2 outright.
 
-The distinction is worth understanding. IAM policies **grant** permissions. An
-SCP sets the **maximum** any principal in the account may do, and an explicit
-Deny in an SCP beats every Allow beneath it, including `AdministratorAccess`
-and including the account root user. Since that policy lives in AWS's
-organization rather than mine, there is nothing in my console to change.
-Attaching more IAM permissions would make no difference at all.
+IAM policies **grant** permissions. An SCP sets the **maximum** any principal in
+the account may do, and an explicit Deny in an SCP beats every Allow beneath it,
+including `AdministratorAccess` and the account root user. That policy lives in
+AWS's organization, not mine, so there is nothing to change. Attaching more IAM
+permissions would make no difference whatsoever.
 
-So `terraform validate` confirms the configuration is correct, and the apply is
-blocked by account policy rather than by anything in the code.
+### So apply runs against LocalStack
 
----
+LocalStack implements the same AWS APIs in a container. Only the provider
+endpoints move; `main.tf` is untouched:
+
+```hcl
+provider "aws" {
+  access_key                  = var.use_localstack ? "test" : null
+  skip_credentials_validation = var.use_localstack
+  s3_use_path_style           = var.use_localstack
+
+  dynamic "endpoints" {
+    for_each = var.use_localstack ? [1] : []
+    content {
+      s3  = var.localstack_endpoint
+      ec2 = var.localstack_endpoint
+      sts = var.localstack_endpoint
+    }
+  }
+}
+```
+
+```text
+$ terraform apply -auto-approve -no-color
+Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+bucket_arn = "arn:aws:s3:::devops-course-24bcs10406-demo"
+bucket_name = "devops-course-24bcs10406-demo"
+bucket_region = "ap-south-1"
+
+$ terraform state list
+aws_s3_bucket.demo
+aws_s3_bucket_public_access_block.demo
+aws_s3_bucket_server_side_encryption_configuration.demo
+aws_s3_bucket_versioning.demo
+```
+
+Read back with the AWS CLI rather than taking Terraform's word for it:
+
+```text
+$ aws --endpoint-url=http://localhost:4566 s3 ls
+2026-10-07 23:37:02 devops-course-24bcs10406-demo
+
+$ aws ... s3api get-bucket-versioning --bucket devops-course-24bcs10406-demo
+{
+    "Status": "Enabled"
+}
+
+$ aws ... s3api get-bucket-encryption ... --query '...ApplyServerSideEncryptionByDefault'
++---------------+----------+
+|  SSEAlgorithm |  AES256  |
++---------------+----------+
+
+$ aws ... s3api get-public-access-block --bucket devops-course-24bcs10406-demo
+||  BlockPublicAcls        |  True ||
+||  BlockPublicPolicy      |  True ||
+||  IgnorePublicAcls       |  True ||
+||  RestrictPublicBuckets  |  True ||
+```
+
+All four settings took effect. Note these are four **separate resources**, not
+arguments on the bucket. Before AWS provider v4 several of them were inline
+arguments, and splitting them out is why older tutorials no longer apply
+cleanly. It also means you can forget one: a bucket with no
+`aws_s3_bucket_public_access_block` is not blocked by that resource's absence,
+it simply has whatever the account default is.
+
+```text
+$ terraform destroy -auto-approve -no-color
+Destroy complete! Resources: 4 destroyed.
+```
+
+To target a real account instead, `terraform apply -var use_localstack=false`
+with credentials configured. Nothing else changes.
 
 ## 12. What I took away
 
@@ -354,7 +421,12 @@ blocked by account policy rather than by anything in the code.
 - State holds secrets in plain text whatever the `sensitive` flag says.
 - Drift is detected on refresh and corrected on apply, so manual changes do not
   survive. Terraform only manages what is in state.
-- An explicit Deny in an SCP cannot be overridden from inside the account.
+- An explicit Deny in an SCP cannot be overridden from inside the account, so
+  no amount of IAM permission would have helped.
+- LocalStack serves the same AWS APIs, so the identical configuration applies
+  for real and the AWS CLI reads it back. Only the provider endpoints move.
+- The S3 bucket settings are separate resources rather than arguments, so one
+  can be silently omitted.
 
 ---
 
@@ -367,11 +439,12 @@ blocked by account policy rather than by anything in the code.
 | State listing, and a second plan finding no changes | [tf-03-state-idempotent.png](screenshots/tf-03-state-idempotent.png) |
 | Drift detected after editing a managed file by hand | [tf-04-drift.png](screenshots/tf-04-drift.png) |
 | `destroy`, and why it removed 5 of 6 | [tf-05-destroy.png](screenshots/tf-05-destroy.png) |
-| AWS config valid, apply blocked by the SCP | [tf-06-aws-validate.png](screenshots/tf-06-aws-validate.png) |
+| AWS config valid, and the SCP denial on the real account | [tf-06-aws-validate.png](screenshots/tf-06-aws-validate.png) |
+| The same config applied against LocalStack, verified with the CLI | [tf-07-localstack-apply.png](screenshots/tf-07-localstack-apply.png) |
 
 ![terraform apply](screenshots/tf-02-apply.png)
 
-![aws validated, apply blocked by the service control policy](screenshots/tf-06-aws-validate.png)
+![The same configuration applied against LocalStack](screenshots/tf-07-localstack-apply.png)
 
 ---
 

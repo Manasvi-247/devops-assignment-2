@@ -1,0 +1,265 @@
+===== 1. The target =====
+# LocalStack provides real AWS APIs locally, so apply actually runs.
+# the same configuration targets real AWS with -var use_localstack=false
+
+$ curl -s http://localhost:4566/_localstack/health | python3 -c "
+import json,sys
+d=json.load(sys.stdin)['services']
+for k in ('ec2','s3'):
+    print(f'{k}: {d.get(k)}')"
+ec2: running
+s3: running
+
+===== 2. The configuration =====
+
+$ ls
+main.tf
+outputs.tf
+terraform.tfstate
+variables.tf
+versions.tf
+
+$ cat main.tf
+# Availability zones are looked up rather than hardcoded, so the same code
+# works in any region.
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project}-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.project}-igw"
+  }
+}
+
+resource "aws_subnet" "public" {
+  count = length(var.public_subnet_cidrs)
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project}-public-${count.index + 1}"
+    Tier = "public"
+  }
+}
+
+# A subnet is only public because its route table sends 0.0.0.0/0 to an
+# internet gateway. Nothing else marks it as public.
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = {
+    Name = "${var.project}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_security_group" "web" {
+  name        = "${var.project}-web"
+  description = "Allow inbound HTTP and all outbound"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_http_cidr]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project}-web-sg"
+  }
+}
+
+===== 3. init, validate, fmt =====
+
+$ terraform init -no-color | tail -6
+any changes that are required for your infrastructure. All Terraform commands
+should now work.
+
+If you ever set or change modules or backend configuration for Terraform,
+rerun this command to reinitialize your working directory. If you forget, other
+commands will detect it and remind you to do so if necessary.
+
+$ terraform validate -no-color
+Success! The configuration is valid.
+
+
+$ terraform fmt -check -no-color && echo 'formatting is already canonical'
+formatting is already canonical
+
+===== 4. plan =====
+
+$ terraform plan -no-color | tail -12
+aws_internet_gateway.main: Refreshing state... [id=igw-ac370ba0]
+aws_subnet.public[0]: Refreshing state... [id=subnet-c3fc17d0]
+aws_subnet.public[1]: Refreshing state... [id=subnet-beacc67a]
+aws_security_group.web: Refreshing state... [id=sg-c553cba6b0754c5a2]
+aws_route_table.public: Refreshing state... [id=rtb-f2438c61]
+aws_route_table_association.public[0]: Refreshing state... [id=rtbassoc-4bc2b6de]
+aws_route_table_association.public[1]: Refreshing state... [id=rtbassoc-26ce053a]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+===== 5. apply =====
+
+$ terraform apply -auto-approve -no-color | tail -22
+aws_route_table_association.public[0]: Refreshing state... [id=rtbassoc-4bc2b6de]
+aws_route_table_association.public[1]: Refreshing state... [id=rtbassoc-26ce053a]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+availability_zones = [
+  "ap-south-1a",
+  "ap-south-1b",
+]
+public_subnet_ids = [
+  "subnet-c3fc17d0",
+  "subnet-beacc67a",
+]
+security_group_id = "sg-c553cba6b0754c5a2"
+vpc_id = "vpc-b09be995"
+
+===== 6. What terraform tracks =====
+
+$ terraform state list
+data.aws_availability_zones.available
+aws_internet_gateway.main
+aws_route_table.public
+aws_route_table_association.public[0]
+aws_route_table_association.public[1]
+aws_security_group.web
+aws_subnet.public[0]
+aws_subnet.public[1]
+aws_vpc.main
+
+$ terraform output -no-color
+availability_zones = [
+  "ap-south-1a",
+  "ap-south-1b",
+]
+public_subnet_ids = [
+  "subnet-c3fc17d0",
+  "subnet-beacc67a",
+]
+security_group_id = "sg-c553cba6b0754c5a2"
+vpc_id = "vpc-b09be995"
+
+===== 7. Verified independently with the aws cli =====
+# terraform could be lying. these queries go straight to the api.
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-vpcs --filters Name=tag:Name,Values=devops-course-vpc --query 'Vpcs[].{ID:VpcId,CIDR:CidrBlock,State:State,DnsHostnames:EnableDnsHostnames}' --output table
+---------------------------------------------------------------
+|                        DescribeVpcs                         |
++--------------+----------------+----------------+------------+
+|     CIDR     | DnsHostnames   |      ID        |   State    |
++--------------+----------------+----------------+------------+
+|  10.20.0.0/16|  None          |  vpc-b09be995  |  available |
++--------------+----------------+----------------+------------+
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-subnets --filters Name=tag:Tier,Values=public --query 'Subnets[].{ID:SubnetId,CIDR:CidrBlock,AZ:AvailabilityZone,AutoPublicIP:MapPublicIpOnLaunch}' --output table
+--------------------------------------------------------------------
+|                          DescribeSubnets                         |
++-------------+---------------+---------------+--------------------+
+|     AZ      | AutoPublicIP  |     CIDR      |        ID          |
++-------------+---------------+---------------+--------------------+
+|  ap-south-1a|  True         |  10.20.1.0/24 |  subnet-c3fc17d0   |
+|  ap-south-1b|  True         |  10.20.2.0/24 |  subnet-beacc67a   |
++-------------+---------------+---------------+--------------------+
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-internet-gateways --query 'InternetGateways[].{ID:InternetGatewayId,AttachedTo:Attachments[0].VpcId,State:Attachments[0].State}' --output table
+-----------------------------------------------
+|          DescribeInternetGateways           |
++--------------+----------------+-------------+
+|  AttachedTo  |      ID        |    State    |
++--------------+----------------+-------------+
+|  vpc-b09be995|  igw-ac370ba0  |  available  |
++--------------+----------------+-------------+
+# the route that makes those subnets public:
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-route-tables --query 'RouteTables[?Tags[?Value==`devops-course-public-rt`]].Routes[]' --output table
+------------------------------------------------------------------------
+|                          DescribeRouteTables                         |
++-----------------------+---------------+--------------------+---------+
+| DestinationCidrBlock  |   GatewayId   |      Origin        |  State  |
++-----------------------+---------------+--------------------+---------+
+|  10.20.0.0/16         |  local        |  CreateRouteTable  |  active |
+|  0.0.0.0/0            |  igw-ac370ba0 |  CreateRoute       |  active |
++-----------------------+---------------+--------------------+---------+
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-security-groups --filters Name=group-name,Values=devops-course-web --query 'SecurityGroups[].IpPermissions[].{From:FromPort,To:ToPort,Proto:IpProtocol,Cidr:IpRanges[0].CidrIp}' --output table
+--------------------------------------
+|       DescribeSecurityGroups       |
++------------+-------+---------+-----+
+|    Cidr    | From  |  Proto  | To  |
++------------+-------+---------+-----+
+|  0.0.0.0/0 |  80   |  tcp    |  80 |
++------------+-------+---------+-----+
+
+===== 8. Idempotency =====
+
+$ terraform plan -no-color | tail -4
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+===== 9. destroy =====
+
+$ terraform destroy -auto-approve -no-color | tail -6
+aws_internet_gateway.main: Destroying... [id=igw-ac370ba0]
+aws_internet_gateway.main: Destruction complete after 0s
+aws_vpc.main: Destroying... [id=vpc-b09be995]
+aws_vpc.main: Destruction complete after 0s
+
+Destroy complete! Resources: 8 destroyed.
+
+$ aws --endpoint-url=http://localhost:4566 ec2 describe-vpcs --filters Name=tag:Name,Values=devops-course-vpc --query 'length(Vpcs)' --output text
+0
+
+===== Done. Output saved to /Users/manasvi/Desktop/devops-assignment-2/11_Cloud_Terraform/output.log =====
