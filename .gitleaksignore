@@ -1,0 +1,25 @@
+# Accepted detections, reviewed 2026-10-08.
+#
+# Every entry below is a teaching credential that is published on purpose, in
+# a lab that exists to show how the credential is handled. None of them opens
+# anything. They are listed here rather than suppressed with a blanket rule so
+# that a new, real detection still fails the scan.
+#
+# 04_K8s_Ingress_ConfigMaps_Secrets
+#   The session 12 lab demonstrates that a kubernetes Secret stores base64,
+#   not ciphertext. Showing the encoded value next to the decoded one is the
+#   entire point of the exercise, so both appear in the readme and the log.
+#
+# 12_Monitoring_Observability_GitOps
+#   Grafana's default admin:admin, passed to curl so the datasource check can
+#   authenticate. It is the documented default of a container that is created
+#   and destroyed by the same script.
+#
+02791617b7909e4d31cd04ac838fa9d104ebea31:04_K8s_Ingress_ConfigMaps_Secrets/README.md:generic-api-key:40
+02791617b7909e4d31cd04ac838fa9d104ebea31:04_K8s_Ingress_ConfigMaps_Secrets/output.log:generic-api-key:34
+a353c2007c1c69e9f3f488fe878bdb27c2dee41e:12_Monitoring_Observability_GitOps/verify.sh:curl-auth-user:59
+a353c2007c1c69e9f3f488fe878bdb27c2dee41e:12_Monitoring_Observability_GitOps/verify.sh:curl-auth-user:67
+c51ada7b78ca5ee7cac44de8da94c9a17aacaca1:12_Monitoring_Observability_GitOps/README.md:curl-auth-user:228
+c51ada7b78ca5ee7cac44de8da94c9a17aacaca1:12_Monitoring_Observability_GitOps/README.md:curl-auth-user:258
+c51ada7b78ca5ee7cac44de8da94c9a17aacaca1:12_Monitoring_Observability_GitOps/output.log:curl-auth-user:105
+c51ada7b78ca5ee7cac44de8da94c9a17aacaca1:12_Monitoring_Observability_GitOps/output.log:curl-auth-user:112

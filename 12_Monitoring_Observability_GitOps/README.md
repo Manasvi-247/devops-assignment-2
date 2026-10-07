@@ -585,10 +585,45 @@ result is a failed comparison instead of the script exiting mid-drill.
 | Argo CD's seven pods and its three CRDs | [s20-05-argocd.png](screenshots/s20-05-argocd.png) |
 | Application `Synced` and `Healthy`, objects owned by `argocd-controller` | [s20-06-app-synced.png](screenshots/s20-06-app-synced.png) |
 | The self healing drill: 2, then 5, then 2 again | [s20-07-self-healing.png](screenshots/s20-07-self-healing.png) |
+| Prometheus target health in its own UI | [s20-08-ui-prometheus-targets.png](screenshots/s20-08-ui-prometheus-targets.png) |
+| A rate query drawn over time | [s20-09-ui-prometheus-graph.png](screenshots/s20-09-ui-prometheus-graph.png) |
+| The provisioned datasource in Grafana | [s20-10-ui-grafana-datasource.png](screenshots/s20-10-ui-grafana-datasource.png) |
+| Grafana querying Prometheus in Explore | [s20-11-ui-grafana-explore.png](screenshots/s20-11-ui-grafana-explore.png) |
 
 ![up returning 1 for every target, plus a gauge and a rate](screenshots/s20-03-promql.png)
 
 ![Argo reverting a manual scale within five seconds](screenshots/s20-07-self-healing.png)
+
+### The web interfaces
+
+Prometheus and Grafana both ship a UI, and some of this is easier to see there
+than in a terminal.
+
+Prometheus tracks each target's health itself. Scrape duration is on the right,
+which is the first number to look at when a target starts flapping.
+
+![Prometheus target health, all three up](screenshots/s20-08-ui-prometheus-targets.png)
+
+The same rate query from section 4, drawn over time. The climb at the right is
+the burst of API requests the script fires before querying, which is why the
+rate is non zero at all.
+
+![A rate query drawn over five minutes](screenshots/s20-09-ui-prometheus-graph.png)
+
+The datasource was never added by hand. It came from
+[`grafana-datasource.yml`](prometheus-grafana/grafana-datasource.yml), mounted
+into Grafana's provisioning directory, which is why it is already there and
+already marked default on a container that has only just started.
+
+![The provisioned Prometheus datasource](screenshots/s20-10-ui-grafana-datasource.png)
+
+Grafana querying through that datasource in Explore. Worth noting the warning
+above the graph: `Showing only 20 series` out of 57. Each distinct combination
+of labels is its own series, so one metric with a `handler` label becomes a
+series per endpoint. That is cardinality, and it is the thing that makes a
+Prometheus instance run out of memory when someone puts a user ID in a label.
+
+![Grafana Explore querying Prometheus](screenshots/s20-11-ui-grafana-explore.png)
 
 ---
 
